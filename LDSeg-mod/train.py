@@ -369,12 +369,12 @@ def train(args):
             logging.info(f"Epoch {epoch+1} Val Loss: {avg_val_loss:.6f} (Recon: {val_metrics['recon']:.4f}, Diff: {val_metrics['diff']:.4f}, KL: {val_metrics['kl']:.4f})")
             print(f"Epoch {epoch+1} Val Loss: {avg_val_loss:.6f}")
         
-        # Ambiguous Segmentation Metrics (Every 4 epochs)
-        if (epoch + 1) % 4 == 0 and val_loader:
+        # Ambiguous Segmentation Metrics (Every 10 epochs)
+        if (epoch + 1) % 10 == 0 and val_loader:
             try:
                 from sampling import compute_metrics_for_dataloader
                 print(f"Computing Ambiguous Segmentation Metrics for Epoch {epoch+1}...")
-                metrics = compute_metrics_for_dataloader(model, diffusion, val_loader, num_samples=8, device=device) # using 8 samples for speed
+                metrics = compute_metrics_for_dataloader(model, diffusion, val_loader, num_samples=4, device=device)
                 logging.info(f"Epoch {epoch+1} Metrics: GED={metrics['GED']:.4f}, MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}, Sensitivity={metrics['Sensitivity']:.4f}, Agreement={metrics['Agreement']:.4f}")
                 print(f"Metrics: GED={metrics['GED']:.4f}, MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}")
             except Exception as e:

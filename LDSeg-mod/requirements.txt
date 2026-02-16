@@ -1,0 +1,11 @@
+tensorflow==2.12
+cuda-python
+matplotlib
+opencv-python
+scipy
+imageio
+SimpleITK
+scikit-learn
+scikit-image
+natsort
+tqdm

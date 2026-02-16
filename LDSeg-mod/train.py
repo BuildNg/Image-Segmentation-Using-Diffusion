@@ -20,6 +20,7 @@ import os
 import argparse
 import configparser
 import logging
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -31,16 +32,32 @@ import numpy as np
 # Local imports
 from dataloader import LIDCDataset
 from LDSeg_mod import build_ldseg_from_config
-import sys
 
-# Ensure guided_diffusion can be imported
-if '..' not in sys.path:
-    sys.path.append('..')
+SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
+PARENT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
+GUIDED_DIFFUSION_DIR = os.path.join(PARENT_DIR, 'guided_diffusion')
+GUIDED_DIFFUSION_NESTED_DIR = os.path.join(GUIDED_DIFFUSION_DIR, 'guided_diffusion')
+
+sys_path_candidates = [PARENT_DIR]
+if os.path.isdir(GUIDED_DIFFUSION_NESTED_DIR):
+    # Support repo layout like: guided_diffusion/guided_diffusion/script_util.py
+    sys_path_candidates.insert(0, GUIDED_DIFFUSION_DIR)
+
+for path in reversed(sys_path_candidates):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 try:
     from guided_diffusion.script_util import create_gaussian_diffusion
-except ImportError:
-    print("Error: Could not import guided_diffusion. Please ensure it is in the parent directory.")
+except ImportError as e:
+    print(
+        "Error: Could not import guided_diffusion. "
+        f"Expected package path at: {GUIDED_DIFFUSION_DIR}"
+    )
+    print(f"guided_diffusion dir exists: {os.path.isdir(GUIDED_DIFFUSION_DIR)}")
+    print(f"nested guided_diffusion dir exists: {os.path.isdir(GUIDED_DIFFUSION_NESTED_DIR)}")
+    print(f"sys.path candidates used: {sys_path_candidates}")
+    print(f"ImportError details: {e}")
     sys.exit(1)
 
 # --- Configuration Parsing ---
@@ -48,6 +65,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train LDSeg model")
     parser.add_argument('--config', type=str, default='train_config.ini', help='Path to training config file')
     return parser.parse_args()
+
+def resolve_path(path, base_dir):
+    if os.path.isabs(path):
+        return path
+    if os.path.exists(path):
+        return os.path.abspath(path)
+    return os.path.abspath(os.path.join(base_dir, path))
 
 def load_config(config_path):
     config = configparser.ConfigParser()
@@ -162,10 +186,12 @@ def validate(model, val_loader, diffusion, timesteps, criterion_ce, criterion_di
 
 def train(args):
     # 1. Load Config
-    train_cfg = load_config(args.config)
+    config_path = resolve_path(args.config, SCRIPT_DIR)
+    train_cfg = load_config(config_path)
+    config_dir = os.path.dirname(config_path)
     
     # 2. Setup Logging
-    log_dir = train_cfg.get('Logging', 'LogDir')
+    log_dir = resolve_path(train_cfg.get('Logging', 'LogDir'), config_dir)
     os.makedirs(log_dir, exist_ok=True)
     
     logging.basicConfig(
@@ -179,7 +205,7 @@ def train(args):
     logging.getLogger('').addHandler(console)
     
     logging.info("Starting training...")
-    logging.info(f"Loaded config from {args.config}")
+    logging.info(f"Loaded config from {config_path}")
     
     # 3. Setup Device & Seed
     device_name = train_cfg.get('Device', 'Device', fallback=None)
@@ -188,6 +214,11 @@ def train(args):
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f"Using device: {device}")
+    if device.type == 'cpu' and torch.cuda.is_available():
+        logging.warning(
+            "CUDA is available but training is set to CPU. "
+            "Check [Device] Device in train_config.ini."
+        )
     
     seed = train_cfg.getint('Training', 'Seed')
     torch.manual_seed(seed)
@@ -199,8 +230,8 @@ def train(args):
         torch.cuda.manual_seed_all(seed)
     
     # 4. Data Loaders
-    dataset_dir = train_cfg.get('Data', 'DatasetDir')
-    val_dir = train_cfg.get('Data', 'ValidationDir')
+    dataset_dir = resolve_path(train_cfg.get('Data', 'DatasetDir'), config_dir)
+    val_dir = resolve_path(train_cfg.get('Data', 'ValidationDir'), config_dir)
     batch_size = train_cfg.getint('Training', 'BatchSize')
     num_workers = train_cfg.getint('Data', 'NumWorkers')
     
@@ -224,12 +255,13 @@ def train(args):
         val_loader = None
 
     # 5. Model
-    model = build_ldseg_from_config('model_config.ini') # Assumes model config matches code
+    model_config_path = os.path.join(SCRIPT_DIR, 'model_config.ini')
+    model = build_ldseg_from_config(model_config_path)
     model = model.to(device)
     
     # 6. Noise Scheduler
     # Read model config for schedule params
-    model_cfg = load_config('model_config.ini')
+    model_cfg = load_config(model_config_path)
     schedule_type = model_cfg.get('NoiseScheduler', 'Scheduler')
     timesteps = model_cfg.getint('NoiseScheduler', 'Timesteps')
     diffusion = create_gaussian_diffusion(steps=timesteps, noise_schedule=schedule_type)
@@ -263,6 +295,8 @@ def train(args):
     min_delta = train_cfg.getfloat('EarlyStopping', 'MinDelta')
     best_metric = float('inf')
     patience_counter = 0
+
+    num_train_batches = len(train_loader)
 
     for epoch in range(epochs):
         model.train()
@@ -311,6 +345,18 @@ def train(args):
                 'Diff': f"{loss_diff.item():.4f}",
                 'KL': f"{loss_kl.item():.4f}"
             })
+
+            logging.info(
+                "Epoch %d/%d Batch %d/%d - Loss: %.6f (Recon: %.6f, Diff: %.6f, KL: %.6f)",
+                epoch + 1,
+                epochs,
+                i + 1,
+                num_train_batches,
+                loss_total.item(),
+                loss_recon.item(),
+                loss_diff.item(),
+                loss_kl.item()
+            )
             
         avg_train_loss = epoch_loss / len(train_loader)
         logging.info(f"Epoch {epoch+1} Train Loss: {avg_train_loss:.6f}")
@@ -347,7 +393,7 @@ def train(args):
                 'loss': avg_train_loss,
                 'val_loss': avg_val_loss
             }, checkpoint_path)
-            logging.info(f"Saved checkpoint to {checkpoint_path} with metrics {avg_val_loss:.4f}")
+            logging.info(f"Saved checkpoint to {checkpoint_path}")
 
         # Early Stopping
         if early_stop_enable:

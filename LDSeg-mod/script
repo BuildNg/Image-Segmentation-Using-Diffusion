@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --job-name=nampq      # define job name
+#SBATCH --nodes=1             # define node
+#SBATCH --gpus-per-node=1     # define gpu limmit in 1 node
+#SBATCH --ntasks=1            # define number tasks
+#SBATCH --cpus-per-task=24    # There are 24 CPU cores
+#SBATCH --time=3-00:20:00     # Max running time = 10 minutes
+
+set -euo pipefail
+WORK_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+PARENT_DIR="$(cd "${WORK_DIR}/.." && pwd)"
+GUIDED_REPO_DIR="${PARENT_DIR}/guided_diffusion"
+cd "${WORK_DIR}"
+export PYTHONPATH="${GUIDED_REPO_DIR}:${PARENT_DIR}:${PYTHONPATH:-}"
+
+nvidia-smi
+echo "-----------------------------"
+echo "PWD: $(pwd)"
+echo "SLURM_SUBMIT_DIR: ${SLURM_SUBMIT_DIR:-<unset>}"
+echo "PYTHONPATH: ${PYTHONPATH}"
+
+
+python -u train.py --config train_config.ini
+
+echo "-----------------------------"
+echo "Exit worker node"
+

@@ -347,7 +347,7 @@ def train(args):
                 'loss': avg_train_loss,
                 'val_loss': avg_val_loss
             }, checkpoint_path)
-            logging.info(f"Saved checkpoint to {checkpoint_path}")
+            logging.info(f"Saved checkpoint to {checkpoint_path} with metrics {avg_val_loss:.4f}")
 
         # Early Stopping
         if early_stop_enable:

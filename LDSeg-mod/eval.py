@@ -111,7 +111,7 @@ def main():
         print(f"Time taken: {end_time - start_time:.2f} seconds")
     
     # Optional: Save results to a file
-    results_path = os.path.join(os.path.dirname(checkpoint_path), 'eval_results.txt') if os.path.dirname(checkpoint_path) else 'eval_results.txt'
+    results_path = os.path.join(os.path.dirname(checkpoint_path), 'eval_results_ddim.txt') if os.path.dirname(checkpoint_path) else 'eval_results_ddim.txt'
     with open(results_path, 'w') as f:
         f.write("Evaluation Results:\n")
         for name, value in metrics.items():

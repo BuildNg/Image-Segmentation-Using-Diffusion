@@ -19,7 +19,7 @@ def dice_score(pred, target):
     intersection = (pred * target).sum(-1)
     union = pred.sum(-1) + target.sum(-1)
     
-    return (2. * intersection + smooth) / (union + smooth)
+    return (2. * intersection + smooth) / (union + smooth)  
 
 def iou(pred, target):
     """

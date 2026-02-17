@@ -11,6 +11,7 @@ import configparser
 import torch
 from torch.utils.data import DataLoader
 import sys
+import time
 
 # Ensure local imports work
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
@@ -87,20 +88,27 @@ def main():
     
     # 6. Compute Metrics
     num_samples = eval_cfg.getint('Evaluation', 'NumSamples')
-    print(f"Starting evaluation (Samples per image: {num_samples})...")
+    sampler = eval_cfg.get('Evaluation', 'Sampler', fallback='DDIM').strip().upper()
+    use_ddim = sampler == 'DDIM'
+    print(f"Starting evaluation (Samples per image: {num_samples}, Sampler: {sampler})...")
     
+    start_time = time.perf_counter()
     metrics = compute_metrics_for_dataloader(
         model, 
         diffusion, 
         dataloader, 
         num_samples=num_samples, 
-        device=device
+        device=device,
+        use_ddim=use_ddim
     )
+    
+    end_time = time.perf_counter()
     
     # 7. Print Results
     print("\n--- Evaluation Results ---")
     for name, value in metrics.items():
         print(f"{name}: {value:.4f}")
+        print(f"Time taken: {end_time - start_time:.2f} seconds")
     
     # Optional: Save results to a file
     results_path = os.path.join(os.path.dirname(checkpoint_path), 'eval_results.txt') if os.path.dirname(checkpoint_path) else 'eval_results.txt'
@@ -108,6 +116,7 @@ def main():
         f.write("Evaluation Results:\n")
         for name, value in metrics.items():
             f.write(f"{name}: {value:.4f}\n")
+        f.write(f"Time taken: {end_time - start_time:.2f} seconds")
     print(f"Results saved to {results_path}")
 
 if __name__ == "__main__":

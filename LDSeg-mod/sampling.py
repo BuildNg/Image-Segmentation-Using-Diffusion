@@ -121,7 +121,7 @@ def get_distribution_params(model, image, mask, t, device='cuda'):
         
     return output
 
-def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda'):
+def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False):
     """
     Compute GED, Max Dice, and Collective Insight for a given dataloader.
     
@@ -131,6 +131,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         dataloader (DataLoader): Validation dataloader.
         num_samples (int): Number of samples per image to generate for metrics.
         device: Device.
+        use_ddim (bool): Whether to use DDIM sampling (faster) or DDPM (default).
         
     Returns:
         dict: Aggregated metrics.
@@ -169,7 +170,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         preds = []
         for _ in range(num_samples):
             # sample_segmentation returns (B, 1, H, W)
-            pred = sample_segmentation(model, diffusion, images, num_samples=1, device=device)
+            pred = sample_segmentation(model, diffusion, images, num_samples=1, device=device, use_ddim=use_ddim)
             preds.append(pred)
         
         preds = torch.stack(preds, dim=0) # (M, B, 1, H, W)

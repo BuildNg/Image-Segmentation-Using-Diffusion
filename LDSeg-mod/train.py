@@ -319,7 +319,7 @@ def train(args):
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
         for i, (images, masks) in enumerate(pbar):
-            images = images.to(device) # (B, 4, H, W)
+            images = images.to(device) # (B, 1, H, W)
             masks = masks.to(device)   # (B, 1, H, W)
             
             optimizer.zero_grad()

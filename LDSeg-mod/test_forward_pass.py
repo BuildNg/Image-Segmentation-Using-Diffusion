@@ -54,10 +54,10 @@ def test_forward_pass():
         # Use simple manual batching since we only have 1 sample
         # Dataloader would add batch dim automatically
         img, mask = dataset[0]
-        # Dataset returns: image (4, H, W), mask (1, H, W)
+        # Dataset returns: image (1, H, W), mask (1, H, W)
         print(f"Loaded item shapes: img={img.shape}, mask={mask.shape}")
         
-        # Add batch dim -> (1, 4, H, W)
+        # Add batch dim -> (1, 1, H, W)
         img = img.unsqueeze(0)
         mask = mask.unsqueeze(0)
         

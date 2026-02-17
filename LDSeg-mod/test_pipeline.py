@@ -33,7 +33,7 @@ class DummyDataset(Dataset):
         # Re-reading train.py line 273: "images = images.to(device) # (B, 4, H, W)"
         # This is quite specific. Maybe 4 slices?
         # Let's produce (4, 128, 128) random images.
-        image = torch.randn(4, 128, 128)
+        image = torch.randn(1, 128, 128)
         
         # Mask: (1, 128, 128)
         mask = torch.randint(0, 2, (1, 128, 128)).float()
@@ -48,7 +48,7 @@ class TestPipeline(unittest.TestCase):
         # Create a minimal model config
         config = configparser.ConfigParser()
         config['Model'] = {
-            'InChannels': '4',
+            'InChannels': '1',
             'OutChannels': '1',
             'ModelChannels': '32',
             'NumResBlocks': '1',

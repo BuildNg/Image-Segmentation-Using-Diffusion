@@ -19,7 +19,7 @@ The loader:
   3. Scales by 1/255.
   4. Optionally applies data augmentation (geometric + intensity).
   5. Returns:
-       - image: (4, H, W) tensor (grayscale image repeated 4 times)
+        - image: (1, H, W) tensor (grayscale image)
        - label: (1, H, W) tensor (randomly sampled from label0..3)
        - path:  (optional, if test_flag=True) path to image file
 """
@@ -292,7 +292,6 @@ class LIDCDataset(Dataset):
         if self.test_flag:
             # --- Evaluation mode: return ALL 4 ground truth masks ---
             image = torch.from_numpy(image_np).unsqueeze(0)  # (1, H, W)
-            image = image.repeat(4, 1, 1)  # (4, H, W)
             
             all_labels = []
             for i in range(1, 5):
@@ -313,7 +312,6 @@ class LIDCDataset(Dataset):
                 )
 
             image = torch.from_numpy(image_np).unsqueeze(0)  # (1, H, W)
-            image = image.repeat(4, 1, 1)  # (4, H, W)
             label = torch.from_numpy(label_np).unsqueeze(0)  # (1, H, W)
             
             return image, label

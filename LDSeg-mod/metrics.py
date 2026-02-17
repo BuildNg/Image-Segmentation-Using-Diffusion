@@ -202,7 +202,8 @@ def collective_insight(preds, gts):
     dmax = max_dice(preds, gts)
     da = diversity_agreement(preds, gts)
     
-    eps = 1e-6
-    ci = 3 * sc * dmax * da / (sc + dmax + da + eps)
+    eps = 1e-8
+    # Harmonic mean of the three metrics
+    ci = 3 * sc * dmax * da / (sc * dmax + dmax * da + da * sc + eps)
     
     return ci, sc, dmax, da

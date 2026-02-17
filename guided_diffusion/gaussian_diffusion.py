@@ -573,12 +573,14 @@ class GaussianDiffusion:
                     print('sampling step', i)
 
                 with th.no_grad():
-                    if img.shape != (1, 5, 128, 128):
-                        img = torch.cat((org_MRI,img), dim=1)       #in every step, make sure to concatenate the original image to the sampled segmentation mask
+                    model_input = img
+                    if model_input.shape[1] == 1:
+                        # Re-attach the original image channels when the current state is mask-only.
+                        model_input = torch.cat((org_MRI, model_input), dim=1)
 
                     out = self.p_sample(
                         model,
-                        img.float(),
+                        model_input.float(),
                         t,
                         clip_denoised=clip_denoised,
                         denoised_fn=denoised_fn,
@@ -852,12 +854,14 @@ class GaussianDiffusion:
         for i in indices:
                 t = th.tensor([i] * shape[0], device=device)
                 with th.no_grad():
-                 if img.shape != (1, 5, 224, 224):
-                     img = torch.cat((orghigh,img), dim=1).float()
+                 model_input = img
+                 if model_input.shape[1] == 1:
+                     # Re-attach the original image channels when the current state is mask-only.
+                     model_input = torch.cat((orghigh, model_input), dim=1).float()
 
                  out = self.ddim_sample(
                     model,
-                    img,
+                    model_input,
                     t,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,

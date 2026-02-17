@@ -1,158 +1,199 @@
 """
-Generate a large batch of image samples from a model and save them as a large
-numpy array. This can be used to produce samples for FID evaluation.
+Sample LIDC masks on a single GPU and evaluate 4x4 ambiguity metrics.
 """
 
 import argparse
-import os
-import torch
-import nibabel as nib
-
-import sys
 import random
-sys.path.append(".")
+import sys
+from pathlib import Path
+
 import numpy as np
-import time
 import torch as th
-import torch.distributed as dist
+
+sys.path.append(".")
+
 from guided_diffusion import dist_util, logger
-from guided_diffusion.bratsloader import BRATSDataset
 from guided_diffusion.lidcloader import LIDCDataset
 from guided_diffusion.script_util import (
-    NUM_CLASSES,
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
     add_dict_to_argparser,
     args_to_dict,
+    create_model_and_diffusion,
+    model_and_diffusion_defaults,
 )
-seed=10
+from metrics import (
+    collective_insight,
+    combined_sensitivity,
+    diversity_agreement,
+    generalized_energy_distance,
+    max_dice,
+)
+
+seed = 10
 th.manual_seed(seed)
-th.cuda.manual_seed_all(seed)
+if th.cuda.is_available():
+    th.cuda.manual_seed_all(seed)
 np.random.seed(seed)
 random.seed(seed)
 
-def visualize(img):
-    _min = img.min()
-    _max = img.max()
-    normalized_img = (img - _min)/ (_max - _min)
-    return normalized_img
 
-def dice_score(pred, targs):
-    pred = (pred>0).float()
-    return 2. * (pred*targs).sum() / (pred+targs).sum()
+def parse_num_samples(num_samples_arg, dataset_size):
+    value = str(num_samples_arg).strip().lower()
+    if value == "all":
+        return dataset_size
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError("--num_samples must be a positive integer or 'all'.")
+    return min(parsed, dataset_size)
+
+
+def tensor_scalar(x):
+    if isinstance(x, th.Tensor):
+        return float(x.detach().float().mean().cpu().item())
+    return float(x)
+
+
+def to_hard_mask(sample, rule):
+    sample = sample.float()
+    if rule == "auto":
+        if th.all((sample == 0) | (sample == 1)):
+            return sample
+        sample_min = float(sample.min().item())
+        sample_max = float(sample.max().item())
+        threshold = 0.5 if sample_min >= 0.0 and sample_max <= 1.0 else 0.0
+        return (sample > threshold).float()
+    if rule == "threshold_0_5":
+        return (sample > 0.5).float()
+    if rule == "threshold_0_0":
+        return (sample > 0.0).float()
+    raise ValueError(f"Unsupported hard mask rule: {rule}")
+
+
+def get_case_id(path_str):
+    return Path(path_str).parent.name
 
 
 def main():
     args = create_argparser().parse_args()
-    args = create_argparser().parse_args()
-    
-    world_size = args.ngpu
+    if args.batch_size != 1:
+        raise ValueError("This evaluation script currently supports --batch_size 1 only.")
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = "0,1"
-    os.environ["MASTER_PORT"] = str(1028)
-    
-    torch.distributed.init_process_group(
-    'gloo',
-    init_method='env://',
-    world_size=world_size,
-    rank=args.local_rank,)
-    
     logger.configure()
-
     logger.log("creating model and diffusion...")
-    model, diffusion, prior, posterior = create_model_and_diffusion(
+    model, diffusion, _, _ = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
-    
-        
-    torch.cuda.set_device(args.local_rank)
-    
-    model.to(dist_util.dev())
-    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = torch.nn.parallel.DistributedDataParallel(
-    model,
-    device_ids=[args.local_rank],
-    output_device=args.local_rank,
-)
-    
-    ds = LIDCDataset(args.data_dir, test_flag=True)
-    
-        
-    sampler = torch.utils.data.distributed.DistributedSampler(
-    ds,
-    num_replicas=args.ngpu,
-    rank=args.local_rank,
-)
-  
-    
-    datal = th.utils.data.DataLoader(
-        ds,
-        batch_size=1,
-        sampler = sampler,
-        shuffle=False)
-    data = iter(datal)
-    all_images = []
-    model.load_state_dict(
-        dist_util.load_state_dict(args.model_path, map_location="cpu")
-    )
+
+    model.load_state_dict(dist_util.load_state_dict(args.model_path, map_location="cpu"))
     model.to(dist_util.dev())
     if args.use_fp16:
         model.convert_to_fp16()
     model.eval()
-    while len(all_images) * args.batch_size < args.num_samples:
-        b, label, path = next(data)  #should return an image from the dataloader "data"
-        c = th.randn_like(b[:, :1, ...])
-        img = th.cat((b, c), dim=1)     #add a noise channel$
-        slice_ID=path[0].split("/", -1)[3]
-        
-        print(f"Processing slice: {slice_ID}")
 
-        logger.log("sampling...")
+    dataset = LIDCDataset(args.data_dir, test_flag=True)
+    dataloader = th.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+    total_cases = parse_num_samples(args.num_samples, len(dataset))
+    if total_cases == 0:
+        raise ValueError(f"No test cases found in {args.data_dir}.")
 
-        start = th.cuda.Event(enable_timing=True)
-        end = th.cuda.Event(enable_timing=True)
+    metric_values = {
+        "GED": [],
+        "D_max": [],
+        "Sc": [],
+        "D_a": [],
+        "CI": [],
+    }
 
+    sample_fn = (
+        diffusion.p_sample_loop_known
+        if not args.use_ddim
+        else diffusion.ddim_sample_loop_known
+    )
 
-        for i in range(args.num_ensemble):  #this is for the generation of an ensemble of 5 masks.
-            model_kwargs = {}
-            start.record()
-            sample_fn = (
-                diffusion.p_sample_loop_known if not args.use_ddim else diffusion.ddim_sample_loop_known
-            )
-            
-            sample, x_noisy, org = sample_fn(
-                model,
-                (args.batch_size, 3, args.image_size, args.image_size), img,
-                clip_denoised=args.clip_denoised,
-                model_kwargs=model_kwargs,
-            )
+    logger.log(f"evaluating {total_cases} case(s)...")
+    for case_idx, (image, expert_masks, path) in enumerate(dataloader):
+        if case_idx >= total_cases:
+            break
 
-            end.record()
-            th.cuda.synchronize()
-            print('time for 1 sample', start.elapsed_time(end))  #time measurement for the generation of 1 sample
+        image = image.to(dist_util.dev()).float()
+        expert_masks = (expert_masks.to(dist_util.dev()).float() > 0.5).float()
+        case_id = get_case_id(path[0])
 
-            s = th.tensor(sample)
-            print(f"Saved sample {i} for slice {slice_ID}")
-            th.save(s, './results/'+str(slice_ID)+'_output'+str(i)) #save the generated mask
+        preds = []
+        with th.no_grad():
+            for _ in range(args.num_ensemble):
+                # p_sample_loop_known expects [image_channels + one mask/noise channel].
+                input_pair = th.cat((image, th.zeros_like(image[:, :1, ...])), dim=1)
+                sample, _, _ = sample_fn(
+                    model,
+                    (
+                        image.shape[0],
+                        args.image_in_channels + 1,
+                        args.image_size,
+                        args.image_size,
+                    ),
+                    input_pair,
+                    clip_denoised=args.clip_denoised,
+                    model_kwargs={},
+                )
+                preds.append(to_hard_mask(sample, args.hard_mask_rule))
+
+        preds = th.stack(preds, dim=0)  # [M, B, C, H, W]
+        gts = expert_masks.permute(1, 0, 2, 3).unsqueeze(2)  # [N, B, C, H, W]
+
+        ged = tensor_scalar(generalized_energy_distance(preds, gts))
+        dmax = tensor_scalar(max_dice(preds, gts))
+        sc = tensor_scalar(combined_sensitivity(preds, gts))
+        da = tensor_scalar(diversity_agreement(preds, gts))
+        ci, _, _, _ = collective_insight(preds, gts)
+        ci = tensor_scalar(ci)
+
+        metric_values["GED"].append(ged)
+        metric_values["D_max"].append(dmax)
+        metric_values["Sc"].append(sc)
+        metric_values["D_a"].append(da)
+        metric_values["CI"].append(ci)
+
+        print(
+            f"case={case_id} GED={ged:.6f} D_max={dmax:.6f} "
+            f"Sc={sc:.6f} D_a={da:.6f} CI={ci:.6f}"
+        )
+
+    print("")
+    print(f"Evaluated cases: {len(metric_values['GED'])}")
+    for metric_name in ["GED", "D_max", "Sc", "D_a", "CI"]:
+        values = np.asarray(metric_values[metric_name], dtype=np.float64)
+        print(
+            f"{metric_name}: mean={values.mean():.6f} std={values.std(ddof=0):.6f}"
+        )
+
 
 def create_argparser():
     defaults = dict(
         data_dir="./data/testing",
         clip_denoised=True,
-        num_samples=1,
         batch_size=1,
         use_ddim=False,
         model_path="",
-        num_ensemble=5      #number of samples in the ensemble
+        num_ensemble=4,
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local_rank', type=int, default=2)
-    parser.add_argument('--ngpu', type=int, default=2)
     add_dict_to_argparser(parser, defaults)
+    parser.add_argument(
+        "--num_samples",
+        type=str,
+        default="1",
+        help="Number of test cases to evaluate, or 'all'.",
+    )
+    parser.add_argument(
+        "--hard_mask_rule",
+        type=str,
+        default="auto",
+        choices=["auto", "threshold_0_5", "threshold_0_0"],
+        help="Rule to binarize sampled masks before metric computation.",
+    )
     return parser
 
 
 if __name__ == "__main__":
-
     main()

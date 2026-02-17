@@ -60,6 +60,7 @@ def model_and_diffusion_defaults():
         resblock_updown=False,
         use_fp16=False,
         use_new_attention_order=False,
+        image_in_channels=1,
         input_channels_dist = 1,
         num_filters = [32,64,128,192],
         no_convs_per_block = 3,
@@ -102,6 +103,7 @@ def create_model_and_diffusion(
     resblock_updown,
     use_fp16,
     use_new_attention_order,
+    image_in_channels,
     input_channels_dist,
     num_filters,
     no_convs_per_block,
@@ -125,6 +127,7 @@ def create_model_and_diffusion(
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
         use_new_attention_order=use_new_attention_order,
+        image_in_channels=image_in_channels,
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -175,6 +178,7 @@ def create_model(
     resblock_updown=False,
     use_fp16=False,
     use_new_attention_order=False,
+    image_in_channels=1,
 ):
     if channel_mult == "":
         if image_size == 512:
@@ -196,7 +200,7 @@ def create_model(
 
     return UNetModel(
         image_size=image_size,
-        in_channels=5,
+        in_channels=image_in_channels + 1,
         model_channels=num_channels,
         out_channels=2,#(3 if not learn_sigma else 6),
         num_res_blocks=num_res_blocks,

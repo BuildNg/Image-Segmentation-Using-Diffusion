@@ -19,6 +19,23 @@ from .resample import LossAwareSampler, UniformSampler
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
 
+
+def dist_is_initialized():
+    return dist.is_available() and dist.is_initialized()
+
+
+def get_world_size():
+    if dist_is_initialized():
+        return dist.get_world_size()
+    return 1
+
+
+def get_rank():
+    if dist_is_initialized():
+        return dist.get_rank()
+    return 0
+
+
 def visualize(img):
     _min = img.min()
     _max = img.max()
@@ -48,6 +65,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        max_steps=0,
     ):
         self.model = model
         self.dataloader=dataloader
@@ -70,13 +88,14 @@ class TrainLoop:
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
+        self.max_steps = max_steps
         
         self.prior = prior
         self.posterior = posterior
 
         self.step = 0
         self.resume_step = 0
-        self.global_batch = self.batch_size * dist.get_world_size()
+        self.global_batch = self.batch_size * get_world_size()
 
         self.sync_cuda = th.cuda.is_available()
 
@@ -103,7 +122,7 @@ class TrainLoop:
                 for _ in range(len(self.ema_rate))
             ]
 
-        if th.cuda.is_available():
+        if th.cuda.is_available() and get_world_size() > 1:
             self.use_ddp = True
             self.ddp_model = DDP(
                 self.model,
@@ -114,7 +133,7 @@ class TrainLoop:
                 find_unused_parameters=False,
             )
         else:
-            if dist.get_world_size() > 1:
+            if not th.cuda.is_available() and get_world_size() > 1:
                 logger.warn(
                     "Distributed training requires CUDA. "
                     "Gradients will not be synchronized properly!"
@@ -128,7 +147,7 @@ class TrainLoop:
         if resume_checkpoint:
             print('resume model')
             self.resume_step = parse_resume_step_from_filename(resume_checkpoint)
-            if dist.get_rank() == 0:
+            if get_rank() == 0:
                 logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
                 self.model.load_state_dict(
                     dist_util.load_state_dict(
@@ -144,14 +163,15 @@ class TrainLoop:
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         ema_checkpoint = find_ema_checkpoint(main_checkpoint, self.resume_step, rate)
         if ema_checkpoint:
-            if dist.get_rank() == 0:
+            if get_rank() == 0:
                 logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
                 state_dict = dist_util.load_state_dict(
                     ema_checkpoint, map_location=dist_util.dev()
                 )
                 ema_params = self.mp_trainer.state_dict_to_master_params(state_dict)
 
-        dist_util.sync_params(ema_params)
+        if dist_is_initialized() and get_world_size() > 1:
+            dist_util.sync_params(ema_params)
         return ema_params
 
     def _load_optimizer_state(self):
@@ -172,10 +192,11 @@ class TrainLoop:
         totcls = 0
         totrec=0
         data_iter = iter(self.dataloader)
-        while (
-            not self.lr_anneal_steps
-            or self.step + self.resume_step < self.lr_anneal_steps
-        ):
+        while True:
+            if self.max_steps and self.step + self.resume_step >= self.max_steps:
+                break
+            if self.lr_anneal_steps and self.step + self.resume_step >= self.lr_anneal_steps:
+                break
 
 
             try:
@@ -186,11 +207,11 @@ class TrainLoop:
                     data_iter = iter(self.dataloader)
                     batch, cond = next(data_iter)
 
-            self.run_step(batch, cond)
+            #self.run_step(batch, cond)
 
             lossseg, losscls, lossrec, sample = self.run_step(batch, cond)
             i += 1
-            totseg += lossseg;
+            totseg += lossseg
             totcls += losscls
             totrec += lossrec
 
@@ -253,7 +274,7 @@ class TrainLoop:
 
             if isinstance(self.schedule_sampler, LossAwareSampler):
                 self.schedule_sampler.update_with_local_losses(
-                    t, losses["loss"].detach()
+                    t, losses1[0]["loss"].detach()
                 )
             losses = losses1[0]
             sample = losses1[1]
@@ -288,7 +309,7 @@ class TrainLoop:
     def save(self):
         def save_checkpoint(rate, params):
             state_dict = self.mp_trainer.master_params_to_state_dict(params)
-            if dist.get_rank() == 0:
+            if get_rank() == 0:
                 logger.log(f"saving model {rate}...")
                 if not rate:
                     filename = f"savedmodel{(self.step+self.resume_step):06d}.pt"
@@ -301,14 +322,15 @@ class TrainLoop:
         for rate, params in zip(self.ema_rate, self.ema_params):
             save_checkpoint(rate, params)
 
-        if dist.get_rank() == 0:
+        if get_rank() == 0:
             with bf.BlobFile(
                 bf.join(get_blob_logdir(), f"optsavedmodel{(self.step+self.resume_step):06d}.pt"),
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
 
-        dist.barrier()
+        if dist_is_initialized() and get_world_size() > 1:
+            dist.barrier()
 
 
 def parse_resume_step_from_filename(filename):

@@ -1,6 +1,7 @@
 data/
 results
-
+data.tar
+data.zip
 __pycache__/
 *.pyc
 *.pyo

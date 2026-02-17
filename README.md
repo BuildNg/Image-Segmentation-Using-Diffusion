@@ -58,15 +58,15 @@ TRAIN_FLAGS="--lr 1e-4 --batch_size 20"
 To train the ambiguous segmentation model, run
 
 ```
-!CUDA_VISIBLE_DEVICES=0,4 python -m torch.distributed.launch --nproc_per_node=2 scripts/segmentation_train.py --data_dir ./data/training $TRAIN_FLAGS $MODEL_FLAGS $DIFFUSION_FLAGS
+python scripts/segmentation_train.py --data_dir ./data/training $TRAIN_FLAGS $MODEL_FLAGS $DIFFUSION_FLAGS
 ```
 The model will be saved in the *results* folder.
-For sampling an ensemble of 4 segmentation masks with the DDPM approach, run:
+For sampling 4 segmentation masks per case and computing GED, Dmax, Sc, Da, and CI, run:
 
 ```
-python scripts/segmentation_sample.py  --data_dir ./data/testing  --model_path ./results/savedmodel.pt --num_ensemble=4 $MODEL_FLAGS $DIFFUSION_FLAGS
+python scripts/segmentation_sample.py --data_dir ./data/testing --model_path ./results/savedmodel.pt --num_ensemble 4 --num_samples 1000 $MODEL_FLAGS $DIFFUSION_FLAGS
 ```
-The generated segmentation masks will be stored in the *results* folder. A visualization can be done using [Visdom](https://github.com/fossasia/visdom). If you encounter high frequency noise, you can use noise filters such as [median blur](https://www.tutorialspoint.com/opencv/opencv_median_blur.htm) in post-processing step.
+To evaluate the full test set, use `--num_samples all`.
 
 ## Reference Codes
 

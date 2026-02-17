@@ -146,7 +146,7 @@ def create_model_and_diffusion(
                                      latent_dim,
                                      initializers,
                                      posterior=True
-    ).to(device, dtype=torch.double)
+    ).to(device, dtype=torch.float32)
    
     posterior = AxisAlignedConvGaussian(input_channels_dist,
                                          num_filters,
@@ -154,7 +154,7 @@ def create_model_and_diffusion(
                                          latent_dim,
                                          initializers,
                                          posterior=True
-    ).to(device, dtype=torch.double)
+    ).to(device, dtype=torch.float32)
     
     
     return model, diffusion, prior, posterior

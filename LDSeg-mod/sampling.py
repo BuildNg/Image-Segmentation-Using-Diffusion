@@ -150,19 +150,13 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
     all_sc = []
     all_da = []
     
-    for images, masks in tqdm(dataloader, desc="Computing Metrics"):
+    for images, all_masks, _paths in tqdm(dataloader, desc="Computing Metrics"):
         # images: (B, C, H, W)
-        # masks: (B, 1, H, W) - Ground truth. 
-        # Note: LIDC dataset usually has multiple annotations per image. 
-        # If 'masks' here is a single annotation, metrics might be limited.
-        # Assuming for now 'masks' contains one of the annotations or the dataloader yields (img, [masks...]).
-        # If standard dataloader yields (img, mask), we treat 'masks' as N=1 ground truth.
-        # For proper ambiguous evaluation we need all ground truths.
-        # If the dataloader slices them, we might be computing per slice.
+        # all_masks: (B, 4, 1, H, W) - All 4 annotator ground truth masks
+        # _paths: list of str (not used here)
         
-        # Let's assume prediction generation first.
         images = images.to(device)
-        masks = masks.to(device)
+        all_masks = all_masks.to(device)
         B = images.shape[0]
         
         # Generate M samples for each image in batch
@@ -175,17 +169,14 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         
         preds = torch.stack(preds, dim=0) # (M, B, 1, H, W)
         
-        # Ground truths:
-        # If masks is (B, 1, H, W), then N=1.
-        # Transformation to (N, B, 1, H, W)
-        gts = masks.unsqueeze(0) # (1, B, 1, H, W)
+        # Ground truths: (B, 4, 1, H, W) -> (N, B, 1, H, W)  where N=4
+        gts = all_masks.permute(1, 0, 2, 3, 4)  # (4, B, 1, H, W)
         
         # Binarize inputs for metrics
         preds_bin = (preds > 0).float()
         gts_bin = (gts > 0).float()
         
         # Compute metrics for this batch
-        # Metrics return (B, 1) or (B,) tensors
         ged = generalized_energy_distance(preds_bin, gts_bin)
         md = max_dice(preds_bin, gts_bin)
         ci, sc, _, da = collective_insight(preds_bin, gts_bin)

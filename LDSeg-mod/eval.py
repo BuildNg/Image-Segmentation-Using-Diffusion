@@ -83,7 +83,7 @@ def main():
     num_workers = eval_cfg.getint('Data', 'NumWorkers')
     
     print(f"Loading dataset from {data_dir}...")
-    dataset = LIDCDataset(data_dir, img_size) # Assuming same params
+    dataset = LIDCDataset(data_dir, test_flag=True)  # Returns (image, all_labels, path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
     # 6. Compute Metrics

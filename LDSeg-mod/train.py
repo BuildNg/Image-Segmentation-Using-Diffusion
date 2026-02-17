@@ -30,7 +30,7 @@ from tqdm import tqdm
 import numpy as np
 
 # Local imports
-from dataloader import LIDCDataset
+from dataloader import LIDCDataset, parse_augmentation_config
 from LDSeg_mod import build_ldseg_from_config
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -240,16 +240,31 @@ def train(args):
         logging.error(f"Dataset directory not found: {dataset_dir}")
         return
 
-    # Train Dataset
-    train_dataset = LIDCDataset(dataset_dir, test_flag=False)
+    # Augmentation config
+    aug_cfg = parse_augmentation_config(config_path)
+    if aug_cfg:
+        logging.info(f"Data augmentation ENABLED (p={aug_cfg['probability']:.1f}, "
+                     f"rot={aug_cfg['rotation_degrees']}°, "
+                     f"trans={aug_cfg['translation_fraction']}, "
+                     f"elastic={aug_cfg['elastic_deformation']})")
+    else:
+        logging.info("Data augmentation DISABLED")
+
+    # Train Dataset (with augmentation)
+    train_dataset = LIDCDataset(dataset_dir, test_flag=False, augmentation_cfg=aug_cfg)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     logging.info(f"Train Dataset loaded with {len(train_dataset)} samples.")
     
-    # Val Dataset
+    # Val Dataset (test_flag=False: returns single random label for loss computation)
+    eval_loader = None
     if os.path.exists(val_dir):
         val_dataset = LIDCDataset(val_dir, test_flag=False)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=False)
         logging.info(f"Validation Dataset loaded with {len(val_dataset)} samples.")
+        
+        # Eval Dataset (test_flag=True: returns ALL 4 GT masks for metric computation)
+        eval_dataset = LIDCDataset(val_dir, test_flag=True)
+        eval_loader = DataLoader(eval_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=False)
     else:
         logging.warning(f"Validation directory not found: {val_dir}. Skipping validation.")
         val_loader = None
@@ -370,11 +385,11 @@ def train(args):
             print(f"Epoch {epoch+1} Val Loss: {avg_val_loss:.6f}")
         
         # Ambiguous Segmentation Metrics (Every 10 epochs)
-        if (epoch + 1) % 10 == 0 and val_loader:
+        if (epoch + 1) % 10 == 0 and eval_loader:
             try:
                 from sampling import compute_metrics_for_dataloader
                 print(f"Computing Ambiguous Segmentation Metrics for Epoch {epoch+1}...")
-                metrics = compute_metrics_for_dataloader(model, diffusion, val_loader, num_samples=4, device=device)
+                metrics = compute_metrics_for_dataloader(model, diffusion, eval_loader, num_samples=4, device=device)
                 logging.info(f"Epoch {epoch+1} Metrics: GED={metrics['GED']:.4f}, MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}, Sensitivity={metrics['Sensitivity']:.4f}, Agreement={metrics['Agreement']:.4f}")
                 print(f"Metrics: GED={metrics['GED']:.4f}, MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}")
             except Exception as e:

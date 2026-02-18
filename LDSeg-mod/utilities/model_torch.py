@@ -443,16 +443,30 @@ class LabelEncoder(nn.Module):
         dropout: float = 0.2,
         use_bn: bool = True,
         activation: str = "swish",
+        blocks_per_stage: Optional[Sequence[int]] = None,
     ):
         super().__init__()
         self.elayers = list(elayers)
+        n_stages = len(elayers)
+
+        # Default: 1 ResConvBlock per stage (original behaviour)
+        if blocks_per_stage is None:
+            blocks_per_stage = [1] * n_stages
+        assert len(blocks_per_stage) == n_stages, (
+            f"blocks_per_stage length ({len(blocks_per_stage)}) must match "
+            f"elayers length ({n_stages})"
+        )
 
         blocks = []
         ch_in = in_channels
         for i, mult in enumerate(elayers):
             ch_out = mult * filter_num
+            # First block handles the channel change
             blocks.append(ResConvBlock(ch_in, ch_out, filter_size, dropout, use_bn, activation))
-            if i < len(elayers) - 1:
+            # Additional blocks at the same resolution
+            for _ in range(blocks_per_stage[i] - 1):
+                blocks.append(ResConvBlock(ch_out, ch_out, filter_size, dropout, use_bn, activation))
+            if i < n_stages - 1:
                 blocks.append(nn.MaxPool2d(2))
             ch_in = ch_out
         self.blocks = nn.Sequential(*blocks)
@@ -532,17 +546,32 @@ class LabelDecoder(nn.Module):
         use_bn: bool = True,
         num_classes: int = 2,
         activation: str = "swish",
+        blocks_per_stage: Optional[Sequence[int]] = None,
     ):
         super().__init__()
         self.dlayers = list(dlayers)
+        n_stages = len(dlayers)
+
+        # Default: 1 ResConvBlock per stage (original behaviour)
+        if blocks_per_stage is None:
+            blocks_per_stage = [1] * n_stages
+        assert len(blocks_per_stage) == n_stages, (
+            f"blocks_per_stage length ({len(blocks_per_stage)}) must match "
+            f"dlayers length ({n_stages})"
+        )
 
         upblocks = nn.ModuleList()
         resblocks = nn.ModuleList()
         ch_in = in_channels
-        for mult in dlayers:
+        for i, mult in enumerate(dlayers):
             ch_out = mult * filter_num
             upblocks.append(nn.ConvTranspose2d(ch_in, ch_out, 3, stride=2, padding=1, output_padding=1))
-            resblocks.append(ResConvBlock(ch_out, ch_out, filter_size, dropout, use_bn, activation))
+            # Stack multiple ResConvBlocks at this resolution
+            stage_blocks = nn.ModuleList()
+            stage_blocks.append(ResConvBlock(ch_out, ch_out, filter_size, dropout, use_bn, activation))
+            for _ in range(blocks_per_stage[i] - 1):
+                stage_blocks.append(ResConvBlock(ch_out, ch_out, filter_size, dropout, use_bn, activation))
+            resblocks.append(stage_blocks)
             ch_in = ch_out
 
         self.upblocks = upblocks
@@ -558,9 +587,10 @@ class LabelDecoder(nn.Module):
         Returns:
             (B, num_classes, H, W) — softmax probabilities.
         """
-        for up, res in zip(self.upblocks, self.resblocks):
+        for up, stage_blocks in zip(self.upblocks, self.resblocks):
             x = up(x)
-            x = res(x)
+            for res in stage_blocks:
+                x = res(x)
 
         x = F.silu(x)
         x = self.head_conv(x)
@@ -612,9 +642,19 @@ class ImageEncoder(nn.Module):
         block_mults: Sequence[int] = (2, 4, 4, 2),
         attention_after: Sequence[int] = (2, 3),
         activation: str = "swish",
+        blocks_per_stage: Optional[Sequence[int]] = None,
     ):
         super().__init__()
         self.act_fn = _get_act(activation)
+        n_stages = len(block_mults)
+
+        # Default: 1 block per stage (original behaviour — just the ConvBlock)
+        if blocks_per_stage is None:
+            blocks_per_stage = [1] * n_stages
+        assert len(blocks_per_stage) == n_stages, (
+            f"blocks_per_stage length ({len(blocks_per_stage)}) must match "
+            f"block_mults length ({n_stages})"
+        )
 
         # Initial conv
         self.init_conv = nn.Conv2d(in_channels, filter_size, 3, padding=1)
@@ -626,9 +666,21 @@ class ImageEncoder(nn.Module):
         attention_set = set(attention_after)
         for idx, mult in enumerate(block_mults):
             ch_out = mult * filter_size
-            stage = nn.ModuleDict({
-                "conv_block": ConvBlock(ch_in, ch_out, kernel_size, groups, dropout, activation),
-            })
+            stage = nn.ModuleDict()
+
+            # Extra ResConvBlocks at this resolution BEFORE the downsampling ConvBlock
+            if blocks_per_stage[idx] > 1:
+                extra = nn.ModuleList()
+                # First extra block handles channel change if needed
+                extra.append(ResConvBlock(ch_in, ch_out, kernel_size, dropout, True, activation))
+                for _ in range(blocks_per_stage[idx] - 2):
+                    extra.append(ResConvBlock(ch_out, ch_out, kernel_size, dropout, True, activation))
+                stage["extra_blocks"] = extra
+                # ConvBlock receives ch_out since extra blocks already changed channels
+                stage["conv_block"] = ConvBlock(ch_out, ch_out, kernel_size, groups, dropout, activation)
+            else:
+                stage["conv_block"] = ConvBlock(ch_in, ch_out, kernel_size, groups, dropout, activation)
+
             if idx in attention_set:
                 stage["attn"] = MultiHeadAttentionBlock(ch_out, num_heads=8, groups=groups)
             self.stages.append(stage)
@@ -653,6 +705,9 @@ class ImageEncoder(nn.Module):
         h = self.init_conv(x)
 
         for stage in self.stages:
+            if "extra_blocks" in stage:
+                for blk in stage["extra_blocks"]:
+                    h = blk(h)
             h = stage["conv_block"](h)
             if "attn" in stage:
                 h = stage["attn"](h)

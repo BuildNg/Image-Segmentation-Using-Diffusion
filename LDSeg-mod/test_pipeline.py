@@ -35,10 +35,11 @@ class DummyDataset(Dataset):
         # Let's produce (4, 128, 128) random images.
         image = torch.randn(1, 128, 128)
         
-        # Mask: (1, 128, 128)
-        mask = torch.randint(0, 2, (1, 128, 128)).float()
+        # all_masks: (4, 1, 128, 128) — 4 annotator masks, as expected by
+        # compute_metrics_for_dataloader which unpacks (images, all_masks, _paths)
+        all_masks = torch.randint(0, 2, (4, 1, 128, 128)).float()
         
-        return image, mask
+        return image, all_masks, f"dummy_sample_{idx}"
 
 class TestPipeline(unittest.TestCase):
     def setUp(self):
@@ -113,9 +114,10 @@ class TestPipeline(unittest.TestCase):
         criterion_mse = torch.nn.MSELoss()
         
         model.train()
-        for images, masks in dataloader:
+        for images, all_masks, _paths in dataloader:
             images = images.to(self.device)
-            masks = masks.to(self.device)
+            # Use first annotator mask for training (same as real train loop)
+            masks = all_masks[:, 0].to(self.device)  # (B, 1, H, W)
             
             optimizer.zero_grad()
             t = torch.randint(0, 100, (images.shape[0],), device=self.device).long()

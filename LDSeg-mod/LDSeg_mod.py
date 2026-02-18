@@ -350,6 +350,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         dropout=_float(cfg, "LabelEncoder", "Dropout"),
         use_bn=_bool(cfg, "LabelEncoder", "UseBatchNorm"),
         activation=_str(cfg, "LabelEncoder", "Activation"),
+        blocks_per_stage=_int_list(cfg, "LabelEncoder", "BlocksPerStage") if cfg.has_option("LabelEncoder", "BlocksPerStage") else None,
     )
 
     # ---- Label Decoder --------------------------------------------------- #
@@ -362,6 +363,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         use_bn=_bool(cfg, "LabelDecoder", "UseBatchNorm"),
         num_classes=_int(cfg, "LabelDecoder", "NumClasses"),
         activation=_str(cfg, "LabelDecoder", "Activation"),
+        blocks_per_stage=_int_list(cfg, "LabelDecoder", "BlocksPerStage") if cfg.has_option("LabelDecoder", "BlocksPerStage") else None,
     )
 
     # ---- Image Encoder --------------------------------------------------- #
@@ -375,6 +377,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         block_mults=_int_list(cfg, "ImageEncoder", "BlockMults"),
         attention_after=_int_list(cfg, "ImageEncoder", "AttentionAfter"),
         activation=_str(cfg, "ImageEncoder", "Activation"),
+        blocks_per_stage=_int_list(cfg, "ImageEncoder", "BlocksPerStage") if cfg.has_option("ImageEncoder", "BlocksPerStage") else None,
     )
 
     # ---- Denoiser -------------------------------------------------------- #

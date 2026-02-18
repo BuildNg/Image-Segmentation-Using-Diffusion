@@ -82,8 +82,6 @@ def summarize_metrics(metric_values):
 
 def main():
     args = create_argparser().parse_args()
-    if args.batch_size != 1:
-        raise ValueError("This evaluation script currently supports --batch_size 1 only.")
 
     logger.configure()
     logger.log("creating model and diffusion...")
@@ -98,7 +96,9 @@ def main():
     model.eval()
 
     dataset = LIDCDataset(args.data_dir, test_flag=True)
-    dataloader = th.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+    dataloader = th.utils.data.DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=False
+    )
     total_cases = parse_num_samples(args.num_samples, len(dataset))
     if total_cases == 0:
         raise ValueError(f"No test cases found in {args.data_dir}.")
@@ -118,13 +118,19 @@ def main():
     )
 
     logger.log(f"evaluating {total_cases} case(s)...")
-    for case_idx, (image, expert_masks, path) in enumerate(dataloader):
-        if case_idx >= total_cases:
+    evaluated = 0
+    for image, expert_masks, path in dataloader:
+        if evaluated >= total_cases:
             break
+
+        remaining = total_cases - evaluated
+        if image.shape[0] > remaining:
+            image = image[:remaining]
+            expert_masks = expert_masks[:remaining]
+            path = path[:remaining]
 
         image = image.to(dist_util.dev()).float()
         expert_masks = (expert_masks.to(dist_util.dev()).float() > 0.5).float()
-        case_id = get_case_id(path[0])
 
         preds = []
         with th.no_grad():
@@ -146,36 +152,40 @@ def main():
                 preds.append(to_hard_mask(sample, args.hard_mask_rule))
 
         preds = th.stack(preds, dim=0)  # [M, B, C, H, W]
-        gts = expert_masks.permute(1, 0, 2, 3).unsqueeze(2)  # [N, B, C, H, W]
+        batch_size_cur = preds.shape[1]
+        for b_idx in range(batch_size_cur):
+            case_id = get_case_id(path[b_idx])
+            preds_case = preds[:, b_idx : b_idx + 1, ...]
+            gts_case = expert_masks[b_idx : b_idx + 1].permute(1, 0, 2, 3).unsqueeze(2)
 
-        ged = tensor_scalar(generalized_energy_distance(preds, gts))
-        dmax = tensor_scalar(max_dice(preds, gts))
-        sc = tensor_scalar(combined_sensitivity(preds, gts))
-        da = tensor_scalar(diversity_agreement(preds, gts))
-        ci, _, _, _ = collective_insight(preds, gts)
-        ci = tensor_scalar(ci)
+            ged = tensor_scalar(generalized_energy_distance(preds_case, gts_case))
+            dmax = tensor_scalar(max_dice(preds_case, gts_case))
+            sc = tensor_scalar(combined_sensitivity(preds_case, gts_case))
+            da = tensor_scalar(diversity_agreement(preds_case, gts_case))
+            ci, _, _, _ = collective_insight(preds_case, gts_case)
+            ci = tensor_scalar(ci)
 
-        metric_values["GED"].append(ged)
-        metric_values["D_max"].append(dmax)
-        metric_values["Sc"].append(sc)
-        metric_values["D_a"].append(da)
-        metric_values["CI"].append(ci)
+            metric_values["GED"].append(ged)
+            metric_values["D_max"].append(dmax)
+            metric_values["Sc"].append(sc)
+            metric_values["D_a"].append(da)
+            metric_values["CI"].append(ci)
 
-        print(
-            f"case={case_id} GED={ged:.6f} D_max={dmax:.6f} "
-            f"Sc={sc:.6f} D_a={da:.6f} CI={ci:.6f}"
-        )
-        evaluated = case_idx + 1
-        if evaluated % 20 == 0:
-            running = summarize_metrics(metric_values)
+            evaluated += 1
             print(
-                f"[running mean @ {evaluated} cases] "
-                f"GED={running['GED'][0]:.6f} "
-                f"D_max={running['D_max'][0]:.6f} "
-                f"Sc={running['Sc'][0]:.6f} "
-                f"D_a={running['D_a'][0]:.6f} "
-                f"CI={running['CI'][0]:.6f}"
+                f"case={case_id} GED={ged:.6f} D_max={dmax:.6f} "
+                f"Sc={sc:.6f} D_a={da:.6f} CI={ci:.6f}"
             )
+            if evaluated % 20 == 0:
+                running = summarize_metrics(metric_values)
+                print(
+                    f"[running mean @ {evaluated} cases] "
+                    f"GED={running['GED'][0]:.6f} "
+                    f"D_max={running['D_max'][0]:.6f} "
+                    f"Sc={running['Sc'][0]:.6f} "
+                    f"D_a={running['D_a'][0]:.6f} "
+                    f"CI={running['CI'][0]:.6f}"
+                )
 
     print("")
     print(f"Evaluated cases: {len(metric_values['GED'])}")
@@ -191,7 +201,7 @@ def create_argparser():
     defaults = dict(
         data_dir="./data/testing",
         clip_denoised=True,
-        batch_size=1,
+        batch_size=8,
         use_ddim=False,
         model_path="",
         num_ensemble=4,

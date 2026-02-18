@@ -388,6 +388,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         norm_groups=_int(cfg, "Denoiser", "NormGroups"),
         interpolation=_str(cfg, "Denoiser", "Interpolation"),
         activation=_str(cfg, "Denoiser", "Activation"),
+        time_mlp_depth=cfg.getint("Denoiser", "TimeMlpDepth", fallback=2),
     )
 
     # ---- Distribution (prior & posterior) -------------------------------- #

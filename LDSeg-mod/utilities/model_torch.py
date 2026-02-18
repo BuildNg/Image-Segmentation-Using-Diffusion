@@ -317,17 +317,34 @@ class TimeEmbedding(nn.Module):
 
 
 class TimeMLP(nn.Module):
-    """Two-layer MLP for time embeddings: Dense → Act → Dense."""
+    """Variable-depth MLP for time embeddings: (Dense → Act) × (depth-1) → Dense.
 
-    def __init__(self, units: int, activation: str = "swish"):
+    Parameters
+    ----------
+    units : int
+        Width of every linear layer (input, hidden, and output all share the same width).
+    depth : int
+        Total number of linear layers. Must be >= 2. Default 2 matches the original.
+    activation : str
+        Activation applied between layers.
+    """
+
+    def __init__(self, units: int, depth: int = 2, activation: str = "swish"):
         super().__init__()
+        assert depth >= 2, "TimeMLP depth must be at least 2"
         self.act_fn = _get_act(activation)
-        self.fc1 = nn.Linear(units, units)
-        self.fc2 = nn.Linear(units, units)
+        layers = []
+        for _ in range(depth):
+            layers.append(nn.Linear(units, units))
+        self.layers = nn.ModuleList(layers)
         _init_conv(self, scale=1.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc2(self.act_fn(self.fc1(x)))
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:  # activation after every layer except the last
+                x = self.act_fn(x)
+        return x
 
 
 # ---------- Denoiser residual block --------------------------------------- #
@@ -688,6 +705,7 @@ class Denoiser(nn.Module):
         out_channels: Optional[int] = None,
         interpolation: str = "nearest",
         activation: str = "swish",
+        time_mlp_depth: int = 2,
     ):
         super().__init__()
         if out_channels is None:
@@ -706,7 +724,7 @@ class Denoiser(nn.Module):
         # ---- Time embedding ---------------------------------------------- #
         temb_dim = first_conv_channels * 4
         self.time_emb = TimeEmbedding(temb_dim)
-        self.time_mlp = TimeMLP(temb_dim, activation)
+        self.time_mlp = TimeMLP(temb_dim, depth=time_mlp_depth, activation=activation)
 
         # ---- Down path --------------------------------------------------- #
         self.down_blocks = nn.ModuleList()

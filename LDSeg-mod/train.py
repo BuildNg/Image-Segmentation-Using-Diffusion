@@ -428,7 +428,14 @@ def train(args):
                 best_metric = current_metric
                 patience_counter = 0
                 # Save best model
-                torch.save(model.state_dict(), os.path.join(log_dir, "best_model.pth"))
+                torch.save({
+                    'epoch': epoch + 1,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'loss': avg_train_loss,
+                    'val_loss': avg_val_loss
+                }, os.path.join(log_dir, "best_model.pth"))
                 logging.info(f"New best model saved with {monitor_metric}: {best_metric:.6f}")
             else:
                 patience_counter += 1

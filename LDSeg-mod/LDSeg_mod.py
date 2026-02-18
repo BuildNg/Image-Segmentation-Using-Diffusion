@@ -100,12 +100,12 @@ class DistEncoder(nn.Module):
 
             layers.append(nn.Conv2d(in_dim, out_dim, kernel_size=3, padding=int(padding)))
             layers.append(nn.BatchNorm2d(out_dim))
-            layers.append(nn.SiLU(inplace=True))
+            layers.append(nn.ReLU(inplace=True))
 
             for _ in range(no_convs_per_block - 1):
                 layers.append(nn.Conv2d(out_dim, out_dim, kernel_size=3, padding=int(padding)))
                 layers.append(nn.BatchNorm2d(out_dim))
-                layers.append(nn.SiLU(inplace=True))
+                layers.append(nn.ReLU(inplace=True))
 
         self.layers = nn.Sequential(*layers)
         self.layers.apply(init_weights)

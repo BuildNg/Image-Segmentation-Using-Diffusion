@@ -289,7 +289,13 @@ def train(args):
     
     scheduler = get_lr_scheduler(optimizer, train_cfg, len(train_loader))
     
-    scaler = GradScaler(enabled=train_cfg.getboolean('Training', 'MixedPrecision'))
+    # GradScaler is only needed for float16, NOT bfloat16.
+    # bfloat16 has the same exponent range as float32, so no loss scaling is required.
+    use_amp = train_cfg.getboolean('Training', 'MixedPrecision')
+    scaler = GradScaler(enabled=False)  # bfloat16 does not need GradScaler
+    
+    # Gradient clipping
+    grad_clip_norm = train_cfg.getfloat('Training', 'GradClipNorm', fallback=1.0)
     
     # 8. Losses
     criterion_ce = nn.CrossEntropyLoss()
@@ -327,7 +333,7 @@ def train(args):
             # Sample timesteps
             t = torch.randint(0, timesteps, (images.shape[0],), device=device).long()
             
-            with autocast(enabled=train_cfg.getboolean('Training', 'MixedPrecision')):
+            with autocast(enabled=use_amp, dtype=torch.bfloat16):
                 # Manual noise injection step for scheduler usage:
                 with torch.no_grad():
                     clean_encoded = model.label_encoder(masks)
@@ -347,9 +353,13 @@ def train(args):
                 loss_total = loss_recon + lambda_diff * loss_diff + lambda_kl * loss_kl
             
             # Backward
-            scaler.scale(loss_total).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            loss_total.backward()
+            
+            # Gradient clipping to prevent NaN from exploding gradients
+            if grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
+            
+            optimizer.step()
             scheduler.step()
             
             epoch_loss += loss_total.item()

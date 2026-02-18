@@ -72,6 +72,14 @@ def get_case_id(path_str):
     return Path(path_str).parent.name
 
 
+def summarize_metrics(metric_values):
+    summary = {}
+    for metric_name, values in metric_values.items():
+        arr = np.asarray(values, dtype=np.float64)
+        summary[metric_name] = (arr.mean(), arr.std(ddof=0))
+    return summary
+
+
 def main():
     args = create_argparser().parse_args()
     if args.batch_size != 1:
@@ -157,13 +165,25 @@ def main():
             f"case={case_id} GED={ged:.6f} D_max={dmax:.6f} "
             f"Sc={sc:.6f} D_a={da:.6f} CI={ci:.6f}"
         )
+        evaluated = case_idx + 1
+        if evaluated % 20 == 0:
+            running = summarize_metrics(metric_values)
+            print(
+                f"[running mean @ {evaluated} cases] "
+                f"GED={running['GED'][0]:.6f} "
+                f"D_max={running['D_max'][0]:.6f} "
+                f"Sc={running['Sc'][0]:.6f} "
+                f"D_a={running['D_a'][0]:.6f} "
+                f"CI={running['CI'][0]:.6f}"
+            )
 
     print("")
     print(f"Evaluated cases: {len(metric_values['GED'])}")
+    final_summary = summarize_metrics(metric_values)
     for metric_name in ["GED", "D_max", "Sc", "D_a", "CI"]:
-        values = np.asarray(metric_values[metric_name], dtype=np.float64)
+        mean_value, std_value = final_summary[metric_name]
         print(
-            f"{metric_name}: mean={values.mean():.6f} std={values.std(ddof=0):.6f}"
+            f"{metric_name}: mean={mean_value:.6f} std={std_value:.6f}"
         )
 
 

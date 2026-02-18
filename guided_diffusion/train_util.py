@@ -99,6 +99,15 @@ class TrainLoop:
 
         self.sync_cuda = th.cuda.is_available()
 
+        if self.use_fp16:
+            raise NotImplementedError(
+                "This KL training path currently supports fp32 only. Set --use_fp16 False."
+            )
+        if get_world_size() > 1:
+            raise NotImplementedError(
+                "This KL training path currently supports single-process training only."
+            )
+
         self._load_and_sync_parameters()
         self.mp_trainer = MixedPrecisionTrainer(
             model=self.model,
@@ -107,7 +116,13 @@ class TrainLoop:
         )
 
         self.opt = AdamW(
-            self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
+            [
+                {"params": list(self.mp_trainer.master_params)},
+                {"params": list(self.prior.parameters())},
+                {"params": list(self.posterior.parameters())},
+            ],
+            lr=self.lr,
+            weight_decay=self.weight_decay,
         )
         if self.resume_step:
             self._load_optimizer_state()
@@ -147,11 +162,34 @@ class TrainLoop:
         if resume_checkpoint:
             print('resume model')
             self.resume_step = parse_resume_step_from_filename(resume_checkpoint)
+            prior_checkpoint = find_prior_checkpoint(resume_checkpoint, self.resume_step)
+            posterior_checkpoint = find_posterior_checkpoint(
+                resume_checkpoint, self.resume_step
+            )
+            if prior_checkpoint is None or posterior_checkpoint is None:
+                expected_prior = f"priorsavedmodel{self.resume_step:06d}.pt"
+                expected_post = f"posteriorsavedmodel{self.resume_step:06d}.pt"
+                raise FileNotFoundError(
+                    "Resume checkpoint is missing prior/posterior files. "
+                    f"Expected {expected_prior} and {expected_post} next to {resume_checkpoint}."
+                )
             if get_rank() == 0:
                 logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
                 self.model.load_state_dict(
                     dist_util.load_state_dict(
                         resume_checkpoint, map_location=dist_util.dev()
+                    )
+                )
+                logger.log(f"loading prior from checkpoint: {prior_checkpoint}...")
+                self.prior.load_state_dict(
+                    dist_util.load_state_dict(
+                        prior_checkpoint, map_location=dist_util.dev()
+                    )
+                )
+                logger.log(f"loading posterior from checkpoint: {posterior_checkpoint}...")
+                self.posterior.load_state_dict(
+                    dist_util.load_state_dict(
+                        posterior_checkpoint, map_location=dist_util.dev()
                     )
                 )
 
@@ -177,14 +215,18 @@ class TrainLoop:
     def _load_optimizer_state(self):
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         opt_checkpoint = bf.join(
-            bf.dirname(main_checkpoint), f"opt{self.resume_step:06}.pt"
+            bf.dirname(main_checkpoint), f"optsavedmodel{self.resume_step:06d}.pt"
         )
-        if bf.exists(opt_checkpoint):
-            logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
-            state_dict = dist_util.load_state_dict(
-                opt_checkpoint, map_location=dist_util.dev()
+        if not bf.exists(opt_checkpoint):
+            raise FileNotFoundError(
+                f"Optimizer checkpoint not found: {opt_checkpoint}. "
+                "This training path requires new-format resume artifacts."
             )
-            self.opt.load_state_dict(state_dict)
+        logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
+        state_dict = dist_util.load_state_dict(
+            opt_checkpoint, map_location=dist_util.dev()
+        )
+        self.opt.load_state_dict(state_dict)
 
     def run_loop(self):
         i = 0
@@ -243,6 +285,8 @@ class TrainLoop:
     def forward_backward(self, batch, cond):
 
         self.mp_trainer.zero_grad()
+        self.prior.zero_grad()
+        self.posterior.zero_grad()
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {
@@ -323,8 +367,17 @@ class TrainLoop:
             save_checkpoint(rate, params)
 
         if get_rank() == 0:
+            step = self.step + self.resume_step
+            prior_filename = f"priorsavedmodel{step:06d}.pt"
+            posterior_filename = f"posteriorsavedmodel{step:06d}.pt"
+            logger.log("saving prior...")
+            with bf.BlobFile(bf.join(get_blob_logdir(), prior_filename), "wb") as f:
+                th.save(self.prior.state_dict(), f)
+            logger.log("saving posterior...")
+            with bf.BlobFile(bf.join(get_blob_logdir(), posterior_filename), "wb") as f:
+                th.save(self.posterior.state_dict(), f)
             with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"optsavedmodel{(self.step+self.resume_step):06d}.pt"),
+                bf.join(get_blob_logdir(), f"optsavedmodel{step:06d}.pt"),
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
@@ -363,7 +416,27 @@ def find_resume_checkpoint():
 def find_ema_checkpoint(main_checkpoint, step, rate):
     if main_checkpoint is None:
         return None
-    filename = f"ema_{rate}_{(step):06d}.pt"
+    filename = f"emasavedmodel_{rate}_{(step):06d}.pt"
+    path = bf.join(bf.dirname(main_checkpoint), filename)
+    if bf.exists(path):
+        return path
+    return None
+
+
+def find_prior_checkpoint(main_checkpoint, step):
+    if main_checkpoint is None:
+        return None
+    filename = f"priorsavedmodel{(step):06d}.pt"
+    path = bf.join(bf.dirname(main_checkpoint), filename)
+    if bf.exists(path):
+        return path
+    return None
+
+
+def find_posterior_checkpoint(main_checkpoint, step):
+    if main_checkpoint is None:
+        return None
+    filename = f"posteriorsavedmodel{(step):06d}.pt"
     path = bf.join(bf.dirname(main_checkpoint), filename)
     if bf.exists(path):
         return path

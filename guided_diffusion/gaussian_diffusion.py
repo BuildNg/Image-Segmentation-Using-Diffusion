@@ -980,6 +980,7 @@ class GaussianDiffusion:
             
             
             terms["mse"] = mean_flat((target - model_output) ** 2) #[10,1,128,128]
+            terms["kl_raw"] = kl_div
             terms["kl"] = kl_div / 1000
 
             if "vb" in terms:

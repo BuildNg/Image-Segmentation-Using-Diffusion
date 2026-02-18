@@ -53,20 +53,15 @@ def tensor_scalar(x):
     return float(x)
 
 
-def to_hard_mask(sample, rule):
-    sample = sample.float()
-    if rule == "auto":
-        if th.all((sample == 0) | (sample == 1)):
-            return sample
-        sample_min = float(sample.min().item())
-        sample_max = float(sample.max().item())
-        threshold = 0.5 if sample_min >= 0.0 and sample_max <= 1.0 else 0.0
-        return (sample > threshold).float()
-    if rule == "threshold_0_5":
-        return (sample > 0.5).float()
-    if rule == "threshold_0_0":
-        return (sample > 0.0).float()
-    raise ValueError(f"Unsupported hard mask rule: {rule}")
+def infer_auto_threshold(sample):
+    sample_min = float(sample.min().item())
+    sample_max = float(sample.max().item())
+    threshold = 0.5 if sample_min >= 0.0 and sample_max <= 1.0 else 0.0
+    return threshold, sample_min, sample_max
+
+
+def to_hard_mask(sample, threshold):
+    return (sample.float() > float(threshold)).float()
 
 
 def get_case_id(path_str):
@@ -123,6 +118,12 @@ def main():
         if not args.use_ddim
         else diffusion.ddim_sample_loop_known
     )
+    fixed_threshold = None
+    auto_threshold = None
+    if args.hard_mask_rule == "threshold_0_5":
+        fixed_threshold = 0.5
+    elif args.hard_mask_rule == "threshold_0_0":
+        fixed_threshold = 0.0
 
     logger.log(f"evaluating {total_cases} case(s)...")
     evaluated = 0
@@ -165,7 +166,16 @@ def main():
                     clip_denoised=args.clip_denoised,
                     model_kwargs={},
                 )
-                preds.append(to_hard_mask(sample, args.hard_mask_rule))
+                if fixed_threshold is not None:
+                    preds.append(to_hard_mask(sample, fixed_threshold))
+                else:
+                    if auto_threshold is None:
+                        auto_threshold, smin, smax = infer_auto_threshold(sample)
+                        print(
+                            f"[hard_mask_rule=auto] first sample range=({smin:.4f}, {smax:.4f}) "
+                            f"-> fixed threshold={auto_threshold:.1f} for all cases."
+                        )
+                    preds.append(to_hard_mask(sample, auto_threshold))
                 ensemble_elapsed = time.time() - ensemble_start
                 print(
                     f"[batch {batch_idx}/{total_batches}] "
@@ -245,9 +255,13 @@ def create_argparser():
     parser.add_argument(
         "--hard_mask_rule",
         type=str,
-        default="auto",
+        default="threshold_0_5",
         choices=["auto", "threshold_0_5", "threshold_0_0"],
-        help="Rule to binarize sampled masks before metric computation.",
+        help=(
+            "Rule to binarize sampled masks before metric computation. "
+            "'threshold_0_5' is recommended for masks in [0,1]. "
+            "'auto' infers the threshold once from the first sample and then keeps it fixed."
+        ),
     )
     return parser
 

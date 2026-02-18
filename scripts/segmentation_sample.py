@@ -5,6 +5,7 @@ Sample LIDC masks on a single GPU and evaluate 4x4 ambiguity metrics.
 import argparse
 import random
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +95,11 @@ def main():
     if args.use_fp16:
         model.convert_to_fp16()
     model.eval()
+    print(f"using checkpoint: {args.model_path}")
+    print(
+        f"device={dist_util.dev()} batch_size={args.batch_size} "
+        f"num_ensemble={args.num_ensemble} sampler={'ddim' if args.use_ddim else 'ddpm'}"
+    )
 
     dataset = LIDCDataset(args.data_dir, test_flag=True)
     dataloader = th.utils.data.DataLoader(
@@ -102,6 +108,7 @@ def main():
     total_cases = parse_num_samples(args.num_samples, len(dataset))
     if total_cases == 0:
         raise ValueError(f"No test cases found in {args.data_dir}.")
+    total_batches = (total_cases + args.batch_size - 1) // args.batch_size
 
     metric_values = {
         "GED": [],
@@ -119,22 +126,31 @@ def main():
 
     logger.log(f"evaluating {total_cases} case(s)...")
     evaluated = 0
-    for image, expert_masks, path in dataloader:
+    for batch_idx, (image, expert_masks, path) in enumerate(dataloader, start=1):
         if evaluated >= total_cases:
             break
 
+        batch_start = time.time()
         remaining = total_cases - evaluated
         if image.shape[0] > remaining:
             image = image[:remaining]
             expert_masks = expert_masks[:remaining]
             path = path[:remaining]
+        case_ids = [get_case_id(p) for p in path]
+        range_info = case_ids[0] if len(case_ids) == 1 else f"{case_ids[0]}..{case_ids[-1]}"
+        print(
+            f"[batch {batch_idx}/{total_batches}] start "
+            f"batch_cases={len(case_ids)} evaluated={evaluated}/{total_cases} "
+            f"cases={range_info}"
+        )
 
         image = image.to(dist_util.dev()).float()
         expert_masks = (expert_masks.to(dist_util.dev()).float() > 0.5).float()
 
         preds = []
         with th.no_grad():
-            for _ in range(args.num_ensemble):
+            for ensemble_idx in range(args.num_ensemble):
+                ensemble_start = time.time()
                 # p_sample_loop_known expects [image_channels + one mask/noise channel].
                 input_pair = th.cat((image, th.zeros_like(image[:, :1, ...])), dim=1)
                 sample, _, _ = sample_fn(
@@ -150,6 +166,12 @@ def main():
                     model_kwargs={},
                 )
                 preds.append(to_hard_mask(sample, args.hard_mask_rule))
+                ensemble_elapsed = time.time() - ensemble_start
+                print(
+                    f"[batch {batch_idx}/{total_batches}] "
+                    f"ensemble {ensemble_idx + 1}/{args.num_ensemble} "
+                    f"done in {ensemble_elapsed:.2f}s"
+                )
 
         preds = th.stack(preds, dim=0)  # [M, B, C, H, W]
         batch_size_cur = preds.shape[1]
@@ -186,6 +208,11 @@ def main():
                     f"D_a={running['D_a'][0]:.6f} "
                     f"CI={running['CI'][0]:.6f}"
                 )
+        batch_elapsed = time.time() - batch_start
+        print(
+            f"[batch {batch_idx}/{total_batches}] done in {batch_elapsed:.2f}s "
+            f"evaluated={evaluated}/{total_cases}"
+        )
 
     print("")
     print(f"Evaluated cases: {len(metric_values['GED'])}")

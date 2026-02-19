@@ -2,10 +2,12 @@
 Train a diffusion model on images.
 """
 import argparse
+import os
 import sys
 
-sys.path.append("..")
-sys.path.append(".")
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from guided_diffusion.resample import create_named_schedule_sampler
 from guided_diffusion.lidcloader import LIDCDataset
@@ -39,7 +41,16 @@ def main():
 
     logger.log("creating data loader...")
     ds = LIDCDataset(args.data_dir, test_flag=False)
-    datal = th.utils.data.DataLoader(ds, batch_size=args.batch_size, shuffle=True)
+    loader_kwargs = dict(
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+    )
+    if args.num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+    datal = th.utils.data.DataLoader(ds, **loader_kwargs)
     data = iter(datal)
 
     logger.log("training...")
@@ -68,6 +79,8 @@ def main():
 
 
 def create_argparser():
+    detected_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+    default_num_workers = max(1, min(16, detected_cpus // 2))
     defaults = dict(
         data_dir="./data/training",
         schedule_sampler="uniform",
@@ -83,6 +96,9 @@ def create_argparser():
         resume_checkpoint="",  # "./results/pretrainedmodel.pt",
         use_fp16=False,
         fp16_scale_growth=1e-3,
+        num_workers=default_num_workers,
+        pin_memory=True,
+        prefetch_factor=2,
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

@@ -1,0 +1,46 @@
+#!/bin/bash
+#SBATCH --job-name=nampq      # define job name
+#SBATCH --nodes=1             # define node
+#SBATCH --gpus-per-node=1     # define gpu limmit in 1 node
+#SBATCH --ntasks=1            # define number tasks
+#SBATCH --cpus-per-task=24    # There are 24 CPU cores
+#SBATCH --time=3-00:20:00     # Max running time = 10 minutes
+
+set -euo pipefail
+WORK_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+PARENT_DIR="$(cd "${WORK_DIR}/.." && pwd)"
+GUIDED_REPO_DIR="${PARENT_DIR}/guided_diffusion"
+cd "${WORK_DIR}"
+export PYTHONPATH="${WORK_DIR}:${GUIDED_REPO_DIR}:${PARENT_DIR}:${PYTHONPATH:-}"
+
+nvidia-smi
+echo "-----------------------------"
+echo "PWD: $(pwd)"
+echo "SLURM_SUBMIT_DIR: ${SLURM_SUBMIT_DIR:-<unset>}"
+echo "PYTHONPATH: ${PYTHONPATH}"
+
+MODEL_PATH="${MODEL_PATH:-}"
+EMA_RATE="${EMA_RATE:-0.9999}"
+if [[ -z "${MODEL_PATH}" ]]; then
+  MODEL_PATH="$(ls -1 "${WORK_DIR}"/results/emasavedmodel_${EMA_RATE}_*.pt 2>/dev/null | sort | tail -n 1 || true)"
+fi
+if [[ -z "${MODEL_PATH}" ]]; then
+  MODEL_PATH="$(ls -1 "${WORK_DIR}"/results/emasavedmodel_*_*.pt 2>/dev/null | sort | tail -n 1 || true)"
+fi
+if [[ -z "${MODEL_PATH}" ]]; then
+  echo "ERROR: No EMA checkpoint found in ${WORK_DIR}/results (expected emasavedmodel_*.pt)."
+  echo "Set MODEL_PATH explicitly, e.g. MODEL_PATH=./results/emasavedmodel_0.9999_060000.pt ./run_via_slurm"
+  exit 1
+fi
+echo "Using MODEL_PATH (EMA): ${MODEL_PATH}"
+
+python -u scripts/segmentation_sample.py \
+  --data_dir ./data/testing \
+  --batch_size 8 \
+  --num_samples all --num_ensemble 4 \
+  --model_path "${MODEL_PATH}" \
+  --image_size 128 --num_channels 128 --class_cond False --num_res_blocks 2 --num_heads 1 --learn_sigma True --use_scale_shift_norm False --attention_resolutions 16 \
+  --diffusion_steps 1000 --noise_schedule linear --rescale_learned_sigmas False --rescale_timesteps False
+
+echo "-----------------------------"
+echo "Exit worker node"

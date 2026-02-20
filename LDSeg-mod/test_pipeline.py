@@ -33,7 +33,7 @@ class DummyDataset(Dataset):
         # Re-reading train.py line 273: "images = images.to(device) # (B, 4, H, W)"
         # This is quite specific. Maybe 4 slices?
         # Let's produce (4, 128, 128) random images.
-        image = torch.randn(1, 128, 128)
+        image = torch.randn(4, 128, 128)  # 4-channel (grayscale repeated 4x)
         
         # all_masks: (4, 1, 128, 128) — 4 annotator masks, as expected by
         # compute_metrics_for_dataloader which unpacks (images, all_masks, _paths)

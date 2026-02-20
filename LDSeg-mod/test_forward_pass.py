@@ -56,6 +56,7 @@ def test_forward_pass():
         img, mask = dataset[0]
         # Dataset returns: image (1, H, W), mask (1, H, W)
         print(f"Loaded item shapes: img={img.shape}, mask={mask.shape}")
+        assert img.shape[0] == 4, f"Expected 4-channel image, got {img.shape[0]} channels"
         
         # Add batch dim -> (1, 1, H, W)
         img = img.unsqueeze(0)

@@ -1,0 +1,23 @@
+DEBUG: utilities.model_torch loaded from /home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/utilities/model_torch.py
+Created dummy sample in temp_lidc_test_data/sample_001
+Dataset length: 1
+Loaded item shapes: img=torch.Size([1, 128, 128]), mask=torch.Size([1, 128, 128])
+Using Noise Schedule: cosine, Steps: 1000
+DEBUG: Model built. learn_sigma=False
+Forward pass WITH scheduler-generated noise successful.
+  encoded: torch.Size([1, 1, 8, 8])
+  noisy_encoded: torch.Size([1, 1, 8, 8])
+  decoded: torch.Size([1, 2, 128, 128])
+  img_embedding: torch.Size([1, 1, 8, 8])
+  denoiser_out: torch.Size([1, 1, 8, 8])
+  denoiser_raw: torch.Size([1, 1, 8, 8])
+  prior_dist: dist batch=torch.Size([1]) event=torch.Size([6])
+  posterior_dist: dist batch=torch.Size([1]) event=torch.Size([6])
+  kl_div: torch.Size([1])
+Cleaned up temp data.
+Traceback (most recent call last):
+  File "/home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/test_forward_pass.py", line 152, in <module>
+    test_forward_pass()
+  File "/home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/test_forward_pass.py", line 139, in test_forward_pass
+    assert output['denoiser_var'].shape == (1, 1, 8, 8)
+AttributeError: 'NoneType' object has no attribute 'shape'

@@ -1,0 +1,45 @@
+DEBUG: utilities.model_torch loaded from /home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/utilities/model_torch.py
+Created dummy sample in temp_lidc_test_data/sample_001
+Dataset length: 1
+Loaded item shapes: img=torch.Size([1, 128, 128]), mask=torch.Size([1, 128, 128])
+Using Noise Schedule: cosine, Steps: 1000
+DEBUG: Model built. learn_sigma=True
+Forward pass WITH scheduler-generated noise successful.
+  encoded: torch.Size([1, 1, 8, 8])
+  noisy_encoded: torch.Size([1, 1, 8, 8])
+  decoded: torch.Size([1, 2, 128, 128])
+  img_embedding: torch.Size([1, 1, 8, 8])
+  denoiser_out: torch.Size([1, 1, 8, 8])
+  denoiser_var: torch.Size([1, 1, 8, 8])
+  denoiser_raw: torch.Size([1, 2, 8, 8])
+  prior_dist: dist batch=torch.Size([1]) event=torch.Size([6])
+  posterior_dist: dist batch=torch.Size([1]) event=torch.Size([6])
+  kl_div: torch.Size([1])
+ALL TESTS PASSED
+Cleaned up temp data.
+E
+======================================================================
+ERROR: test_vb_loss_calculation (__main__.TestVBLoss)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/test_vb_loss.py", line 57, in test_vb_loss_calculation
+    output = self.model(images, masks, t, noisy_encoded=noisy_encoded)
+  File "/home/dung/.local/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/dung/.local/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/LDSeg_mod.py", line 278, in forward
+    denoiser_raw = self.denoiser(noisy_encoded, img_embedding, timestep)
+  File "/home/dung/.local/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/dung/.local/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/dung/CS89/Image-Segmentation-Using-Diffusion/LDSeg-mod/utilities/model_torch.py", line 905, in forward
+    x = torch.cat([x, skips.pop()], dim=1)
+RuntimeError: Sizes of tensors must match except in dimension 1. Expected size 2 but got size 1 for tensor number 1 in the list.
+
+----------------------------------------------------------------------
+Ran 1 test in 1.247s
+
+FAILED (errors=1)
+Testing on cpu

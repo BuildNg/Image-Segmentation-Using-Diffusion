@@ -159,7 +159,7 @@ class Upsample(nn.Module):
 # ---------- Image-Encoder conv block -------------------------------------- #
 
 class ConvBlock(nn.Module):
-    """Two convs + residual + activation + DownSample + GroupNorm.
+    """Two convs + residual + activation + [DownSample] + GroupNorm.
 
     Mirrors ``conv_block`` in the TF code (used by ImageEncoder).
     """
@@ -172,6 +172,7 @@ class ConvBlock(nn.Module):
         groups: int = 4,
         dropout: float = 0.2,
         activation: str = "swish",
+        downsample: bool = True,
     ):
         super().__init__()
         pad = kernel_size // 2
@@ -182,7 +183,7 @@ class ConvBlock(nn.Module):
         self.drop = nn.Dropout2d(dropout) if dropout > 0 else nn.Identity()
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding=pad)
 
-        self.down = Downsample(out_channels)
+        self.down = Downsample(out_channels) if downsample else nn.Identity()
         self.gn = nn.GroupNorm(groups, out_channels)
 
         _init_conv(self.residual_proj, scale=1.0)
@@ -480,7 +481,7 @@ class LabelEncoder(nn.Module):
         Args:
             x: (B, 1, H, W)
         Returns:
-            (B, 1, H/16, W/16)  (assuming 4 pooling stages)
+            (B, 1, H_lat, W_lat)  where H_lat = H / 2^(n_stages-1)
         """
         h = self.blocks(x)
         h = self.proj(h)
@@ -643,6 +644,7 @@ class ImageEncoder(nn.Module):
         attention_after: Sequence[int] = (2, 3),
         activation: str = "swish",
         blocks_per_stage: Optional[Sequence[int]] = None,
+        no_downsample_at: Optional[Sequence[int]] = None,
     ):
         super().__init__()
         self.act_fn = _get_act(activation)
@@ -656,6 +658,8 @@ class ImageEncoder(nn.Module):
             f"block_mults length ({n_stages})"
         )
 
+        no_ds_set = set(no_downsample_at or [])
+
         # Initial conv
         self.init_conv = nn.Conv2d(in_channels, filter_size, 3, padding=1)
         _init_conv(self.init_conv, scale=1.0)
@@ -667,6 +671,7 @@ class ImageEncoder(nn.Module):
         for idx, mult in enumerate(block_mults):
             ch_out = mult * filter_size
             stage = nn.ModuleDict()
+            do_down = idx not in no_ds_set
 
             # Extra ResConvBlocks at this resolution BEFORE the downsampling ConvBlock
             if blocks_per_stage[idx] > 1:
@@ -677,9 +682,9 @@ class ImageEncoder(nn.Module):
                     extra.append(ResConvBlock(ch_out, ch_out, kernel_size, dropout, True, activation))
                 stage["extra_blocks"] = extra
                 # ConvBlock receives ch_out since extra blocks already changed channels
-                stage["conv_block"] = ConvBlock(ch_out, ch_out, kernel_size, groups, dropout, activation)
+                stage["conv_block"] = ConvBlock(ch_out, ch_out, kernel_size, groups, dropout, activation, downsample=do_down)
             else:
-                stage["conv_block"] = ConvBlock(ch_in, ch_out, kernel_size, groups, dropout, activation)
+                stage["conv_block"] = ConvBlock(ch_in, ch_out, kernel_size, groups, dropout, activation, downsample=do_down)
 
             if idx in attention_set:
                 stage["attn"] = MultiHeadAttentionBlock(ch_out, num_heads=8, groups=groups)
@@ -700,7 +705,7 @@ class ImageEncoder(nn.Module):
         Args:
             x: (B, C, H, W)
         Returns:
-            (B, out_channels, H/16, W/16)
+            (B, out_channels, H_lat, W_lat)  where H_lat depends on num downsamples
         """
         h = self.init_conv(x)
 
@@ -1040,6 +1045,7 @@ def build_models_from_config(
         block_mults=_int_list("ImageEncoder", "BlockMults"),
         attention_after=_int_list("ImageEncoder", "AttentionAfter"),
         activation=_str("ImageEncoder", "Activation"),
+        no_downsample_at=_int_list("ImageEncoder", "NoDownsampleAt") if cfg.has_option("ImageEncoder", "NoDownsampleAt") else None,
     )
 
     # ---- Denoiser -------------------------------------------------------- #

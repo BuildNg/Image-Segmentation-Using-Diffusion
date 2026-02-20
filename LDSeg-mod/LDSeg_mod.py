@@ -378,6 +378,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         attention_after=_int_list(cfg, "ImageEncoder", "AttentionAfter"),
         activation=_str(cfg, "ImageEncoder", "Activation"),
         blocks_per_stage=_int_list(cfg, "ImageEncoder", "BlocksPerStage") if cfg.has_option("ImageEncoder", "BlocksPerStage") else None,
+        no_downsample_at=_int_list(cfg, "ImageEncoder", "NoDownsampleAt") if cfg.has_option("ImageEncoder", "NoDownsampleAt") else None,
     )
 
     # ---- Denoiser -------------------------------------------------------- #
@@ -419,7 +420,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         posterior=True,
     )
 
-    return LDSeg(
+    model = LDSeg(
         label_encoder=label_encoder,
         label_decoder=label_decoder,
         image_encoder=image_encoder,
@@ -427,3 +428,11 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         prior=prior,
         posterior=posterior,
     )
+
+    # Store latent size on the model for use by sampling code
+    if cfg.has_section("Latent") and cfg.has_option("Latent", "LatentSize"):
+        model.latent_size = cfg.getint("Latent", "LatentSize")
+    else:
+        model.latent_size = None
+
+    return model

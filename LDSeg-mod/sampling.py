@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', use_ddim=False):
+def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', use_ddim=False, latent_size=None):
     """
     Sample segmentation mask(s) for a given input image.
 
@@ -22,6 +22,8 @@ def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', u
         num_samples (int): Number of samples per image in batch.
         device (str/torch.device): Device to run on.
         use_ddim (bool): Whether to use DDIM sampling (faster) or DDPM (default).
+        latent_size (int or None): Spatial size of the latent. If None, reads
+            from model.latent_size or defaults to H // 8.
 
     Returns:
         torch.Tensor: Predicted segmentation mask (B, 1, H, W) integer labels.
@@ -30,9 +32,13 @@ def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', u
     image = image.to(device)
     B, C, H, W = image.shape
     
-    # Latent spatial dimensions (downsampled by 16 in LabelEncoder)
-    # TODO: Make this dynamic based on config if possible, but 8x8 for 128x128 is consistent.
-    H_lat, W_lat = H // 16, W // 16
+    # Determine latent spatial dimensions
+    if latent_size is not None:
+        H_lat = W_lat = latent_size
+    elif hasattr(model, 'latent_size') and model.latent_size is not None:
+        H_lat = W_lat = model.latent_size
+    else:
+        H_lat, W_lat = H // 8, W // 8  # default fallback
     
     with torch.no_grad():
         # 1. Encode Image to get conditioning embedding
@@ -121,7 +127,7 @@ def get_distribution_params(model, image, mask, t, device='cuda'):
         
     return output
 
-def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False):
+def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False, latent_size=None):
     """
     Compute GED, Max Dice, and Collective Insight for a given dataloader.
     
@@ -164,7 +170,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         preds = []
         for _ in range(num_samples):
             # sample_segmentation returns (B, 1, H, W)
-            pred = sample_segmentation(model, diffusion, images, num_samples=1, device=device, use_ddim=use_ddim)
+            pred = sample_segmentation(model, diffusion, images, num_samples=1, device=device, use_ddim=use_ddim, latent_size=latent_size)
             preds.append(pred)
         
         preds = torch.stack(preds, dim=0) # (M, B, 1, H, W)

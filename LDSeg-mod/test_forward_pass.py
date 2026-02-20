@@ -126,9 +126,9 @@ def test_forward_pass():
             elif hasattr(v, 'batch_shape'):
                 print(f"  {k}: dist batch={v.batch_shape} event={v.event_shape}")
         
-        # Latent output check (downsample 16x) -> 128/16 = 8
-        assert output['encoded'].shape == (1, 1, 8, 8)
-        assert output['denoiser_out'].shape == (1, 1, 8, 8)
+        # Latent output check (downsample 8x) -> 128/8 = 16
+        assert output['encoded'].shape == (1, 1, 16, 16)
+        assert output['denoiser_out'].shape == (1, 1, 16, 16)
         
         print("ALL TESTS PASSED")
 

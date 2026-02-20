@@ -125,14 +125,14 @@ class TestPipeline(unittest.TestCase):
             # Forward
             try:
                 # Helper to encode masks similar to train.py
-                clean_encoded = model.label_encoder(masks)
+                clean_encoded, _, _ = model.label_encoder(masks)
                 noise = torch.randn_like(clean_encoded)
                 noisy_encoded = diffusion.q_sample(clean_encoded, t, noise=noise)
                 
                 output = model(images, masks, t, noisy_encoded=noisy_encoded)
                 
                 # Simple Loss calc
-                loss = criterion_mse(output['denoiser_out'], noise) + output['kl_div'].mean()
+                loss = criterion_mse(output['denoiser_out'], noise) + output['kl_div'].mean() + output['vae_kl_div'].mean()
                 loss.backward()
                 optimizer.step()
                 print(f"Train step successful. Loss: {loss.item()}")
@@ -144,7 +144,7 @@ class TestPipeline(unittest.TestCase):
         print("Testing Metrics Computation...")
         try:
             # We use the same dataloader as 'val_loader'
-            metrics = compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=2, device=self.device)
+            metrics = compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=2, device=self.device, cfg_scale=3.0)
             print("Metrics Computed:", metrics)
             
             self.assertIn('GED', metrics)

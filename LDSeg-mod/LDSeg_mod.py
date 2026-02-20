@@ -260,8 +260,12 @@ class LDSeg(nn.Module):
               - ``posterior_dist``: posterior distribution (Independent Normal)
               - ``kl_div``        : KL(posterior || prior), scalar per sample (B,)
         """
-        # 1. Encode the ground-truth mask into latent space
-        encoded = self.label_encoder(mask)  # (B, 1, H_lat, W_lat)
+        # 1. Encode the ground-truth mask into latent space (VAE)
+        encoded, mu, logvar = self.label_encoder(mask)  # (B, 1, H_lat, W_lat)
+        
+        # VAE KL Divergence vs standard Normal prior N(0, I)
+        # kl = -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+        vae_kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3]) # (B,)
 
         # 2. Obtain the noisy latent
         #    In a real training loop the caller should compute this via the
@@ -299,6 +303,7 @@ class LDSeg(nn.Module):
             "prior_dist": prior_dist,
             "posterior_dist": posterior_dist,
             "kl_div": kl_div,
+            "vae_kl_div": vae_kl_div,
         }
 
 
@@ -379,6 +384,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         activation=_str(cfg, "ImageEncoder", "Activation"),
         blocks_per_stage=_int_list(cfg, "ImageEncoder", "BlocksPerStage") if cfg.has_option("ImageEncoder", "BlocksPerStage") else None,
         no_downsample_at=_int_list(cfg, "ImageEncoder", "NoDownsampleAt") if cfg.has_option("ImageEncoder", "NoDownsampleAt") else None,
+        num_heads=cfg.getint("ImageEncoder", "NumHeads", fallback=4),
     )
 
     # ---- Denoiser -------------------------------------------------------- #
@@ -393,6 +399,8 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         interpolation=_str(cfg, "Denoiser", "Interpolation"),
         activation=_str(cfg, "Denoiser", "Activation"),
         time_mlp_depth=cfg.getint("Denoiser", "TimeMlpDepth", fallback=2),
+        cond_drop_prob=_float(cfg, "Denoiser", "CondDropProb") if cfg.has_option("Denoiser", "CondDropProb") else 0.0,
+        num_heads=cfg.getint("Denoiser", "NumHeads", fallback=1),
     )
 
     # ---- Distribution (prior & posterior) -------------------------------- #

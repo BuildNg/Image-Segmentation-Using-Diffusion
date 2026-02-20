@@ -18,7 +18,7 @@ Author: auto-ported from Fahim Ahmed Zaman's TF implementation
 """
 
 import math
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -472,20 +472,36 @@ class LabelEncoder(nn.Module):
             ch_in = ch_out
         self.blocks = nn.Sequential(*blocks)
 
-        self.proj = nn.Conv2d(ch_in, 1, 1)
+        # Output 2 channels: one for mu, one for logvar
+        self.proj = nn.Conv2d(ch_in, 2, 1)
         # LayerNorm over (C, H, W) — we use a wrapper since spatial dims are dynamic
-        self.norm = _ChannelLayerNorm(1)
+        # Note: the norm will be applied to mu and logvar combined, or we can just drop it.
+        # Let's keep the norm but apply it to the 2 channels.
+        self.norm = _ChannelLayerNorm(2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             x: (B, 1, H, W)
         Returns:
-            (B, 1, H_lat, W_lat)  where H_lat = H / 2^(n_stages-1)
+            z: Sampled latent (B, 1, H_lat, W_lat)
+            mu: Mean of latent distribution (B, 1, H_lat, W_lat) 
+            logvar: Log variance of latent distribution (B, 1, H_lat, W_lat)
         """
         h = self.blocks(x)
         h = self.proj(h)
-        return self.norm(h)
+        h = self.norm(h)
+        
+        mu, logvar = h.chunk(2, dim=1)
+        
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            z = mu + eps * std
+        else:
+            z = mu
+            
+        return z, mu, logvar
 
 
 class _ChannelLayerNorm(nn.Module):
@@ -645,6 +661,7 @@ class ImageEncoder(nn.Module):
         activation: str = "swish",
         blocks_per_stage: Optional[Sequence[int]] = None,
         no_downsample_at: Optional[Sequence[int]] = None,
+        num_heads: int = 4,
     ):
         super().__init__()
         self.act_fn = _get_act(activation)
@@ -687,7 +704,7 @@ class ImageEncoder(nn.Module):
                 stage["conv_block"] = ConvBlock(ch_in, ch_out, kernel_size, groups, dropout, activation, downsample=do_down)
 
             if idx in attention_set:
-                stage["attn"] = MultiHeadAttentionBlock(ch_out, num_heads=8, groups=groups)
+                stage["attn"] = MultiHeadAttentionBlock(ch_out, num_heads=num_heads, groups=groups)
             self.stages.append(stage)
             ch_in = ch_out
 
@@ -766,6 +783,8 @@ class Denoiser(nn.Module):
         interpolation: str = "nearest",
         activation: str = "swish",
         time_mlp_depth: int = 2,
+        cond_drop_prob: float = 0.0,
+        num_heads: int = 1,
     ):
         super().__init__()
         if out_channels is None:
@@ -775,6 +794,10 @@ class Denoiser(nn.Module):
         has_attention = list(has_attention)
         assert len(widths) == len(has_attention)
         self.act_fn = _get_act(activation)
+        self.cond_drop_prob = cond_drop_prob
+        
+        # Unconditional/null context for Classifier-Free Guidance
+        self.null_context = nn.Parameter(torch.zeros(1, cond_channels, 1, 1))
 
         # ---- Initial conv ------------------------------------------------ #
         in_ch = latent_channels + cond_channels
@@ -797,7 +820,7 @@ class Denoiser(nn.Module):
             for _ in range(num_res_blocks):
                 level_blocks.append(DenoiserResBlock(ch, w, temb_dim, norm_groups, activation))
                 if use_attn:
-                    level_blocks.append(AttentionBlock(w, norm_groups))
+                    level_blocks.append(MultiHeadAttentionBlock(w, num_heads=num_heads, groups=norm_groups))
                 ch = w
                 skip_channels.append(ch)
 
@@ -812,7 +835,7 @@ class Denoiser(nn.Module):
 
         # ---- Middle ------------------------------------------------------ #
         self.mid_res1 = DenoiserResBlock(ch, widths[-1], temb_dim, norm_groups, activation)
-        self.mid_attn = AttentionBlock(widths[-1], norm_groups)
+        self.mid_attn = MultiHeadAttentionBlock(widths[-1], num_heads=num_heads, groups=norm_groups)
         self.mid_res2 = DenoiserResBlock(widths[-1], widths[-1], temb_dim, norm_groups, activation)
 
         # ---- Up path ----------------------------------------------------- #
@@ -828,7 +851,7 @@ class Denoiser(nn.Module):
                 skip_ch = skip_channels.pop()
                 level_blocks.append(DenoiserResBlock(ch + skip_ch, w, temb_dim, norm_groups, activation))
                 if use_attn:
-                    level_blocks.append(AttentionBlock(w, norm_groups))
+                    level_blocks.append(MultiHeadAttentionBlock(w, num_heads=num_heads, groups=norm_groups))
                 ch = w
 
             self.up_blocks.append(level_blocks)
@@ -845,17 +868,29 @@ class Denoiser(nn.Module):
     def forward(
         self,
         z: torch.Tensor,
-        cond: torch.Tensor,
+        cond: Optional[torch.Tensor],
         t: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
             z:    (B, latent_channels, H, W) — noisy latent
-            cond: (B, cond_channels, H, W)   — image-encoder embedding
+            cond: (B, cond_channels, H, W) or None — image-encoder embedding
             t:    (B,)                        — diffusion timestep
         Returns:
             (B, out_channels, H, W) — predicted noise
         """
+        B, _, H, W = z.shape
+        
+        # Classifier-free guidance logic
+        if cond is None:
+            # Unconditional pass
+            cond = self.null_context.expand(B, -1, H, W)
+        elif self.training and self.cond_drop_prob > 0.0:
+            # Randomly drop conditioning during training
+            mask = torch.rand(B, 1, 1, 1, device=cond.device) > self.cond_drop_prob
+            null_cond = self.null_context.expand(B, -1, H, W)
+            cond = torch.where(mask, cond, null_cond)
+
         # Concatenate latent + conditioning
         x = torch.cat([z, cond], dim=1)
         x = self.init_conv(x)
@@ -875,8 +910,8 @@ class Denoiser(nn.Module):
                 x = block(x, temb)
                 idx += 1
 
-                # Optional AttentionBlock
-                if idx < len(level_blocks) and isinstance(level_blocks[idx], AttentionBlock):
+                # Optional MultiHeadAttentionBlock
+                if idx < len(level_blocks) and isinstance(level_blocks[idx], MultiHeadAttentionBlock):
                     x = level_blocks[idx](x)
                     idx += 1
                 
@@ -899,7 +934,7 @@ class Denoiser(nn.Module):
                 if isinstance(block, DenoiserResBlock):
                     x = torch.cat([x, skips.pop()], dim=1)
                     x = block(x, temb)
-                else:  # AttentionBlock
+                elif isinstance(block, MultiHeadAttentionBlock):
                     x = block(x)
                 idx += 1
 

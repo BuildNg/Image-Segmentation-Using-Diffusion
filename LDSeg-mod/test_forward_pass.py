@@ -105,7 +105,7 @@ def test_forward_pass():
                 # To test q_sample, we should ideally encode manually OR trust LDSeg's fallback.
                 # However, LDSeg forward takes `noisy_encoded`.
                 # So we can encode manually here just for the test:
-                clean_encoded = model.label_encoder(mask)
+                clean_encoded, _, _ = model.label_encoder(mask)
                 t_batch = torch.full((1,), 10,  device=clean_encoded.device, dtype=torch.long)
                 
                 # Sample noise and add via scheduler

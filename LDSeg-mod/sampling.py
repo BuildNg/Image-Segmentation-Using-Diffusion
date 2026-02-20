@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', use_ddim=False, latent_size=None):
+def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', use_ddim=False, latent_size=None, cfg_scale=1.0):
     """
     Sample segmentation mask(s) for a given input image.
 
@@ -52,7 +52,13 @@ def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', u
             # x: (B, 1, H_lat, W_lat) noisy latent
             # context: (B, ..., H_lat, W_lat) image embedding
             # t: (B,) timesteps
-            return model.denoiser(x, context, t)
+            if cfg_scale > 1.0:
+                # Classifier-Free Guidance dual-pass
+                cond_pred = model.denoiser(x, context, t)
+                uncond_pred = model.denoiser(x, None, t)
+                return uncond_pred + cfg_scale * (cond_pred - uncond_pred)
+            else:
+                return model.denoiser(x, context, t)
         
         # 3. Create noise and sample
         # If batch size > 1, we might want to sample multiple times per image?
@@ -127,7 +133,7 @@ def get_distribution_params(model, image, mask, t, device='cuda'):
         
     return output
 
-def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False, latent_size=None):
+def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False, latent_size=None, cfg_scale=1.0):
     """
     Compute GED, Max Dice, and Collective Insight for a given dataloader.
     
@@ -170,7 +176,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         preds = []
         for _ in range(num_samples):
             # sample_segmentation returns (B, 1, H, W)
-            pred = sample_segmentation(model, diffusion, images, num_samples=1, device=device, use_ddim=use_ddim, latent_size=latent_size)
+            pred = sample_segmentation(model, diffusion, images, num_samples=1, device=device, use_ddim=use_ddim, latent_size=latent_size, cfg_scale=cfg_scale)
             preds.append(pred)
         
         preds = torch.stack(preds, dim=0) # (M, B, 1, H, W)

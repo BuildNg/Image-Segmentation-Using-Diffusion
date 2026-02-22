@@ -101,7 +101,7 @@ class TestPipeline(unittest.TestCase):
         except Exception as e:
             self.fail(f"Failed to build model: {e}")
             
-        diffusion = create_gaussian_diffusion(steps=100, noise_schedule='linear')
+        diffusion = create_gaussian_diffusion(steps=100, noise_schedule='linear', learn_sigma=model.denoiser.learn_sigma)
         
         # 2. Setup Dummy Data
         dataset = DummyDataset(length=4)
@@ -131,8 +131,13 @@ class TestPipeline(unittest.TestCase):
                 
                 output = model(images, masks, t, noisy_encoded=noisy_encoded)
                 
-                # Simple Loss calc
-                loss = criterion_mse(output['denoiser_out'], noise) + output['kl_div'].mean() + output['vae_kl_div'].mean()
+                denoiser_out = output['denoiser_out']
+                L = noise.shape[1]
+                if denoiser_out.shape[1] == 2 * L:
+                    eps_pred, _ = torch.split(denoiser_out, L, dim=1)
+                else:
+                    eps_pred = denoiser_out
+                loss = criterion_mse(eps_pred, noise) + output['kl_div'].mean() + output['vae_kl_div'].mean()
                 loss.backward()
                 optimizer.step()
                 print(f"Train step successful. Loss: {loss.item()}")

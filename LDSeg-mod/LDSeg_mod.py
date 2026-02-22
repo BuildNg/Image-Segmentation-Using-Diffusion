@@ -286,9 +286,15 @@ class LDSeg(nn.Module):
 
         # 6. Prior & Posterior distributions
         #    Both operate at latent resolution so that spatial dims match.
-        #    Prior  sees (image_embedding, denoiser_prediction)
+        #    Prior  sees (image_embedding, denoiser_prediction_mean)
         #    Posterior sees (image_embedding, clean_encoded_mask)
-        prior_dist = self.prior(img_embedding, denoiser_out)
+        L = encoded.shape[1]
+        if denoiser_out.shape[1] == 2 * L:
+            eps_pred, _ = torch.split(denoiser_out, L, dim=1)
+            prior_dist = self.prior(img_embedding, eps_pred)
+        else:
+            prior_dist = self.prior(img_embedding, denoiser_out)
+            
         posterior_dist = self.posterior(img_embedding, encoded)
 
         # 7. KL divergence
@@ -401,6 +407,7 @@ def build_ldseg_from_config(config_path: str = "model_config.ini") -> LDSeg:
         time_mlp_depth=cfg.getint("Denoiser", "TimeMlpDepth", fallback=2),
         cond_drop_prob=_float(cfg, "Denoiser", "CondDropProb") if cfg.has_option("Denoiser", "CondDropProb") else 0.0,
         num_heads=cfg.getint("Denoiser", "NumHeads", fallback=1),
+        learn_sigma=_bool(cfg, "Denoiser", "LearnSigma") if cfg.has_option("Denoiser", "LearnSigma") else False,
     )
 
     # ---- Distribution (prior & posterior) -------------------------------- #

@@ -46,6 +46,10 @@ def create_test_config():
     config['Logging']['SaveInterval'] = '1'
     config['Data']['NumWorkers'] = '0' # Avoid multiprocessing issues in test
     
+    if not config.has_section('Device'):
+        config.add_section('Device')
+    config['Device']['Device'] = 'cpu'
+    
     with open(CONFIG_FILE, 'w') as f:
         config.write(f)
     print(f"Created test config {CONFIG_FILE}")

@@ -785,10 +785,13 @@ class Denoiser(nn.Module):
         time_mlp_depth: int = 2,
         cond_drop_prob: float = 0.0,
         num_heads: int = 1,
+        learn_sigma: bool = False,
     ):
         super().__init__()
+        self.learn_sigma = learn_sigma
+        
         if out_channels is None:
-            out_channels = latent_channels
+            out_channels = latent_channels * 2 if learn_sigma else latent_channels
 
         widths = list(widths)
         has_attention = list(has_attention)
@@ -961,6 +964,7 @@ def build_models(
     denoiser_attention: Sequence[bool] = (False, True, True),
     denoiser_res_blocks: int = 2,
     norm_groups: int = 4,
+    learn_sigma: bool = False,
 ):
     """Build all four LDSeg model components with matching shapes.
 
@@ -999,6 +1003,7 @@ def build_models(
         has_attention=denoiser_attention,
         num_res_blocks=denoiser_res_blocks,
         norm_groups=norm_groups,
+        learn_sigma=learn_sigma,
     )
 
     return label_encoder, label_decoder, image_encoder, denoiser
@@ -1094,6 +1099,7 @@ def build_models_from_config(
         norm_groups=_int("Denoiser", "NormGroups"),
         interpolation=_str("Denoiser", "Interpolation"),
         activation=_str("Denoiser", "Activation"),
+        learn_sigma=_bool("Denoiser", "LearnSigma") if cfg.has_option("Denoiser", "LearnSigma") else False,
     )
 
     return label_encoder, label_decoder, image_encoder, denoiser

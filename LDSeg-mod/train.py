@@ -30,11 +30,6 @@ from tqdm import tqdm
 import numpy as np
 import copy
 
-# Local imports
-from dataloader import LIDCDataset, parse_augmentation_config
-from LDSeg_mod import build_ldseg_from_config
-from guided_diffusion.nn import update_ema
-
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 PARENT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
 GUIDED_DIFFUSION_DIR = os.path.join(PARENT_DIR, 'guided_diffusion')
@@ -48,6 +43,11 @@ if os.path.isdir(GUIDED_DIFFUSION_NESTED_DIR):
 for path in reversed(sys_path_candidates):
     if path not in sys.path:
         sys.path.insert(0, path)
+
+# Local imports
+from dataloader import LIDCDataset, parse_augmentation_config
+from LDSeg_mod import build_ldseg_from_config
+from guided_diffusion.nn import update_ema
 
 try:
     from guided_diffusion.script_util import create_gaussian_diffusion
@@ -104,6 +104,90 @@ class DiceLoss(nn.Module):
         
         dice = (2. * intersection + self.smooth) / (union + self.smooth)
         return 1 - dice.mean()
+
+def _extract(a, t, x_shape):
+    b, *_ = t.shape
+    out = a.gather(-1, t)
+    return out.reshape(b, *((1,) * (len(x_shape) - 1)))
+
+def approx_standard_normal_cdf(x):
+    return 0.5 * (1.0 + torch.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * torch.pow(x, 3))))
+
+def compute_explicit_vlb_loss(diffusion, x_start, x_t, t, model_output):
+    """Explicitly compute VLB loss for learn_sigma."""
+    B, C = x_t.shape[:2]
+    eps_pred, var_pred = torch.split(model_output, C, dim=1)
+    
+    device = x_t.device
+    def to_t(arr):
+        return torch.tensor(arr, device=device, dtype=torch.float32)
+        
+    alphas_cumprod = to_t(diffusion.alphas_cumprod)
+    alphas_cumprod_prev = to_t(diffusion.alphas_cumprod_prev)
+    sqrt_recip_alphas_cumprod = to_t(diffusion.sqrt_recip_alphas_cumprod)
+    sqrt_recipm1_alphas_cumprod = to_t(diffusion.sqrt_recipm1_alphas_cumprod)
+    posterior_mean_coef1 = to_t(diffusion.posterior_mean_coef1)
+    posterior_mean_coef2 = to_t(diffusion.posterior_mean_coef2)
+    posterior_log_variance_clipped = to_t(diffusion.posterior_log_variance_clipped)
+    betas = to_t(diffusion.betas)
+    
+    # 1. q(x_{t-1} | x_t, x_0) (True posterior)
+    true_mean = (
+        _extract(posterior_mean_coef1, t, x_t.shape) * x_start +
+        _extract(posterior_mean_coef2, t, x_t.shape) * x_t
+    )
+    true_log_var_clipped = _extract(posterior_log_variance_clipped, t, x_t.shape)
+    
+    # 2. p(x_{t-1} | x_t) (Model)
+    min_log = _extract(posterior_log_variance_clipped, t, x_t.shape)
+    max_log = _extract(torch.log(betas), t, x_t.shape)
+    frac = (var_pred + 1) / 2
+    model_log_variance = frac * max_log + (1 - frac) * min_log
+    model_variance = torch.exp(model_log_variance)
+    
+    pred_xstart = (
+        _extract(sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
+        _extract(sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps_pred
+    )
+    pred_xstart = pred_xstart.clamp(-1, 1)
+    
+    model_mean = (
+        _extract(posterior_mean_coef1, t, x_t.shape) * pred_xstart +
+        _extract(posterior_mean_coef2, t, x_t.shape) * x_t
+    )
+    
+    # 3. KL Divergence (analytical) for t > 0
+    true_var = torch.exp(true_log_var_clipped)
+    kl = 0.5 * (
+        (true_var + (true_mean - model_mean) ** 2) / model_variance
+        - 1.0
+        + model_log_variance - true_log_var_clipped
+    )
+    kl = kl.mean(dim=[1, 2, 3]) / np.log(2.0)
+    
+    # 4. Discretized NLL for t == 0
+    inv_stdv = torch.exp(-0.5 * model_log_variance)
+    centered_x = x_start - model_mean
+    plus_in = inv_stdv * (centered_x + 1.0 / 255.0)
+    cdf_plus = approx_standard_normal_cdf(plus_in)
+    min_in = inv_stdv * (centered_x - 1.0 / 255.0)
+    cdf_min = approx_standard_normal_cdf(min_in)
+    
+    log_cdf_plus = torch.log(cdf_plus.clamp(min=1e-12))
+    log_one_minus_cdf_min = torch.log((1.0 - cdf_min).clamp(min=1e-12))
+    cdf_delta = cdf_plus - cdf_min
+    log_probs = torch.where(
+        x_start < -0.999,
+        log_cdf_plus,
+        torch.where(x_start > 0.999, log_one_minus_cdf_min, torch.log(cdf_delta.clamp(min=1e-12)))
+    )
+    decoder_nll = -log_probs.mean(dim=[1, 2, 3]) / np.log(2.0)
+    
+    vlb_loss = torch.where((t == 0), decoder_nll, kl)
+    
+    # The term is typically weighted by `num_timesteps / 1000.0` for scale invariance
+    vlb_loss = vlb_loss * (diffusion.num_timesteps / 1000.0)
+    return vlb_loss.mean()
 
 # --- Training Logic ---
 def get_lr_scheduler(optimizer, config, steps_per_epoch):
@@ -172,7 +256,17 @@ def validate(model, val_loader, diffusion, timesteps, criterion_ce, criterion_di
             loss_ce = criterion_ce(output['decoded'], masks.squeeze(1).long())
             loss_dice = criterion_dice(output['decoded'], masks)
             loss_recon = lambda_ce * loss_ce + gamma_dice * loss_dice
-            loss_diff = criterion_mse(output['denoiser_out'], noise)
+            
+            denoiser_out = output['denoiser_out']
+            L = noise.shape[1]
+            if denoiser_out.shape[1] == 2 * L:
+                eps_pred, _ = torch.split(denoiser_out, L, dim=1)
+                loss_mse = criterion_mse(eps_pred, noise)
+                loss_vlb = compute_explicit_vlb_loss(diffusion, clean_encoded.detach(), noisy_encoded.detach(), t, denoiser_out)
+                loss_diff = loss_mse + loss_vlb
+            else:
+                loss_diff = criterion_mse(denoiser_out, noise)
+                
             loss_kl = output['kl_div'].mean()
             loss_vae_kl = output['vae_kl_div'].mean()
             
@@ -288,8 +382,9 @@ def train(args):
     model_cfg = load_config(model_config_path)
     schedule_type = model_cfg.get('NoiseScheduler', 'Scheduler')
     timesteps = model_cfg.getint('NoiseScheduler', 'Timesteps')
-    diffusion = create_gaussian_diffusion(steps=timesteps, noise_schedule=schedule_type)
-    logging.info(f"Noise scheduler: {schedule_type}, steps: {timesteps}")
+    learn_sigma = model.denoiser.learn_sigma
+    diffusion = create_gaussian_diffusion(steps=timesteps, noise_schedule=schedule_type, learn_sigma=learn_sigma)
+    logging.info(f"Noise scheduler: {schedule_type}, steps: {timesteps}, learn_sigma: {learn_sigma}")
 
     # 7. Optimizer & Scheduler
     unet_params = list(model.denoiser.parameters())
@@ -376,7 +471,17 @@ def train(args):
                 loss_ce = criterion_ce(output['decoded'], masks.squeeze(1).long())
                 loss_dice = criterion_dice(output['decoded'], masks)
                 loss_recon = train_cfg.getfloat('Losses', 'Lambda_CE') * loss_ce + train_cfg.getfloat('Losses', 'Gamma_Dice') * loss_dice
-                loss_diff = criterion_mse(output['denoiser_out'], noise)
+                
+                denoiser_out = output['denoiser_out']
+                L = noise.shape[1]
+                if denoiser_out.shape[1] == 2 * L:
+                    eps_pred, _ = torch.split(denoiser_out, L, dim=1)
+                    loss_mse = criterion_mse(eps_pred, noise)
+                    loss_vlb = compute_explicit_vlb_loss(diffusion, clean_encoded.detach(), noisy_encoded.detach(), t, denoiser_out)
+                    loss_diff = loss_mse + loss_vlb
+                else:
+                    loss_diff = criterion_mse(denoiser_out, noise)
+                    
                 loss_kl = output['kl_div'].mean()
                 loss_vae_kl = output['vae_kl_div'].mean()
                 

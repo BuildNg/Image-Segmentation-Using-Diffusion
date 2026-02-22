@@ -56,7 +56,16 @@ def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', u
                 # Classifier-Free Guidance dual-pass
                 cond_pred = model.denoiser(x, context, t)
                 uncond_pred = model.denoiser(x, None, t)
-                return uncond_pred + cfg_scale * (cond_pred - uncond_pred)
+                
+                L = x.shape[1]
+                if cond_pred.shape[1] == 2 * L:
+                    cond_eps, cond_var = torch.split(cond_pred, L, dim=1)
+                    uncond_eps, _ = torch.split(uncond_pred, L, dim=1)
+                    
+                    cfg_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+                    return torch.cat([cfg_eps, cond_var], dim=1)
+                else:
+                    return uncond_pred + cfg_scale * (cond_pred - uncond_pred)
             else:
                 return model.denoiser(x, context, t)
         

@@ -1,1 +1,1 @@
-Run on big model with larger latent dim
+Run on big model with larger latent dim and larger size.

@@ -1,0 +1,3 @@
+Add VAE-KL loss for stability
+Increase Latent size
+Different learning rates for different components

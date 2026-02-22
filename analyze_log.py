@@ -44,19 +44,19 @@ def parse_train_log(log_path: str = "train.log") -> Dict:
     batch_data = []  # All batch-level data
     
     # Regex patterns
-    # Epoch 1/100 Batch 1/650 - Loss: 2.689331 (Recon: 1.428734, Diff: 1.256600, KL: 3.997421)
+    # Epoch 1/100 Batch 1/650 - Loss: 2.689331 (Recon: 1.428734, Diff: 1.256600, KL: 3.997421, VaeKL: 0.0001)
     batch_pattern = re.compile(
         r'Epoch (\d+)/\d+ Batch (\d+)/\d+ - Loss: ([\d.]+) '
-        r'\(Recon: ([\d.]+), Diff: ([\d.]+), KL: ([\d.]+)\)'
+        r'\(Recon: ([\d.]+), Diff: ([\d.]+), KL: ([\d.]+), VaeKL: ([\d.]+)\)'
     )
     
     # Epoch 1 Train Loss: 2.246044
     train_epoch_pattern = re.compile(r'Epoch (\d+) Train Loss: ([\d.]+)')
     
-    # Epoch 1 Val Loss: 1.713988 (Recon: 1.2740, Diff: 0.4399, KL: 0.0180)
+    # Epoch 1 Val Loss: 1.713988 (Recon: 1.2740, Diff: 0.4399, KL: 0.0180, VaeKL: 0.0001)
     val_pattern = re.compile(
         r'Epoch (\d+) Val Loss: ([\d.]+) '
-        r'\(Recon: ([\d.]+), Diff: ([\d.]+), KL: ([\d.]+)\)'
+        r'\(Recon: ([\d.]+), Diff: ([\d.]+), KL: ([\d.]+), VaeKL: ([\d.]+)\)'
     )
     
     # Epoch 4 Metrics: GED=1.8717, MaxDice=0.0177, CI=0.0248, Sensitivity=0.5660, Agreement=0.9322
@@ -71,10 +71,10 @@ def parse_train_log(log_path: str = "train.log") -> Dict:
             # Parse batch data
             match = batch_pattern.search(line)
             if match:
-                epoch, batch, loss, recon, diff, kl = match.groups()
+                epoch, batch, loss, recon, diff, kl, vae_kl = match.groups()
                 batch_data.append((
                     int(epoch), int(batch),
-                    float(loss), float(recon), float(diff), float(kl)
+                    float(loss), float(recon), float(diff), float(kl), float(vae_kl)
                 ))
                 continue
             
@@ -88,12 +88,13 @@ def parse_train_log(log_path: str = "train.log") -> Dict:
             # Parse validation loss
             match = val_pattern.search(line)
             if match:
-                epoch, loss, recon, diff, kl = match.groups()
+                epoch, loss, recon, diff, kl, vae_kl = match.groups()
                 val_loss[int(epoch)] = float(loss)
                 val_components[int(epoch)] = {
                     'Recon': float(recon),
                     'Diff': float(diff),
-                    'KL': float(kl)
+                    'KL': float(kl),
+                    'VaeKL': float(vae_kl)
                 }
                 continue
             
@@ -112,15 +113,17 @@ def parse_train_log(log_path: str = "train.log") -> Dict:
     
     # Compute average training components per epoch from batch data
     for epoch in train_loss.keys():
-        epoch_batches = [(recon, diff, kl) for e, b, l, recon, diff, kl in batch_data if e == epoch]
+        epoch_batches = [(recon, diff, kl, vae_kl) for e, b, l, recon, diff, kl, vae_kl in batch_data if e == epoch]
         if epoch_batches:
-            avg_recon = np.mean([r for r, d, k in epoch_batches])
-            avg_diff = np.mean([d for r, d, k in epoch_batches])
-            avg_kl = np.mean([k for r, d, k in epoch_batches])
+            avg_recon = np.mean([r for r, d, k, v in epoch_batches])
+            avg_diff = np.mean([d for r, d, k, v in epoch_batches])
+            avg_kl = np.mean([k for r, d, k, v in epoch_batches])
+            avg_vae_kl = np.mean([v for r, d, k, v in epoch_batches])
             train_components[epoch] = {
                 'Recon': avg_recon,
                 'Diff': avg_diff,
-                'KL': avg_kl
+                'KL': avg_kl,
+                'VaeKL': avg_vae_kl
             }
     
     return {
@@ -174,10 +177,11 @@ def plot_training_progress(log_path: str = "train.log", save_path: str = None):
     val_comp = data['val_components']
     metrics = data['metrics']
     
-    fig, axes = plt.subplots(3, 1, figsize=(12, 12))
+    fig = plt.figure(figsize=(14, 14))
+    gs = fig.add_gridspec(3, 2)
     
     # --- Plot 1: Overall Loss ---
-    ax = axes[0]
+    ax = fig.add_subplot(gs[0, :])
     epochs_train = sorted(train_loss.keys())
     epochs_val = sorted(val_loss.keys())
     
@@ -191,8 +195,8 @@ def plot_training_progress(log_path: str = "train.log", save_path: str = None):
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     
-    # --- Plot 2: Loss Components ---
-    ax = axes[1]
+    # --- Plot 2: Recon & Diff Components ---
+    ax = fig.add_subplot(gs[1, 0])
     epochs_train = sorted(train_comp.keys())
     epochs_val = sorted(val_comp.keys())
     
@@ -201,25 +205,43 @@ def plot_training_progress(log_path: str = "train.log", save_path: str = None):
             marker='o', label='Train Recon', linewidth=2, linestyle='-')
     ax.plot(epochs_train, [train_comp[e]['Diff'] for e in epochs_train], 
             marker='s', label='Train Diff', linewidth=2, linestyle='-')
-    ax.plot(epochs_train, [train_comp[e]['KL'] for e in epochs_train], 
-            marker='^', label='Train KL', linewidth=2, linestyle='-')
     
     # Plot validation components
     ax.plot(epochs_val, [val_comp[e]['Recon'] for e in epochs_val], 
             marker='o', label='Val Recon', linewidth=2, linestyle='--', alpha=0.7)
     ax.plot(epochs_val, [val_comp[e]['Diff'] for e in epochs_val], 
             marker='s', label='Val Diff', linewidth=2, linestyle='--', alpha=0.7)
-    ax.plot(epochs_val, [val_comp[e]['KL'] for e in epochs_val], 
-            marker='^', label='Val KL', linewidth=2, linestyle='--', alpha=0.7)
     
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Loss Component Value', fontsize=12)
-    ax.set_title('Loss Components (Recon, Diff, KL)', fontsize=14, fontweight='bold')
+    ax.set_title('Reconstruction & Diffusion Losses', fontsize=14, fontweight='bold')
     ax.legend(fontsize=9, ncol=2)
     ax.grid(True, alpha=0.3)
     
-    # --- Plot 3: Metrics (GED, CI, MaxDice) ---
-    ax = axes[2]
+    # --- Plot 3: KL Components ---
+    ax = fig.add_subplot(gs[1, 1])
+    
+    # Plot training components
+    ax.plot(epochs_train, [train_comp[e]['KL'] for e in epochs_train], 
+            marker='^', label='Train Diff KL', linewidth=2, linestyle='-')
+    ax.plot(epochs_train, [train_comp[e]['VaeKL'] for e in epochs_train], 
+            marker='d', label='Train VAE KL', linewidth=2, linestyle='-')
+    
+    # Plot validation components
+    ax.plot(epochs_val, [val_comp[e]['KL'] for e in epochs_val], 
+            marker='^', label='Val Diff KL', linewidth=2, linestyle='--', alpha=0.7)
+    ax.plot(epochs_val, [val_comp[e]['VaeKL'] for e in epochs_val], 
+            marker='d', label='Val VAE KL', linewidth=2, linestyle='--', alpha=0.7)
+    
+    ax.set_xlabel('Epoch', fontsize=12)
+    ax.set_ylabel('KL Loss Value', fontsize=12)
+    ax.set_yscale('log')
+    ax.set_title('KL Divergence Losses', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=9, ncol=2)
+    ax.grid(True, alpha=0.3)
+    
+    # --- Plot 4: Metrics (GED, CI, MaxDice) ---
+    ax = fig.add_subplot(gs[2, :])
     if metrics:
         epochs_metrics = sorted(metrics.keys())
         
@@ -279,13 +301,13 @@ def plot_batch_loss_history(log_path: str = "train.log", max_batches: int = None
     
     # Create global batch index
     batch_indices = list(range(len(batch_data)))
-    losses = [loss for _, _, loss, _, _, _ in batch_data]
+    losses = [loss for _, _, loss, _, _, _, _ in batch_data]
     
     plt.figure(figsize=(14, 6))
     plt.plot(batch_indices, losses, alpha=0.5, linewidth=0.5)
     
     # Add epoch boundaries
-    epochs = [e for e, _, _, _, _, _ in batch_data]
+    epochs = [e for e, _, _, _, _, _, _ in batch_data]
     epoch_changes = [i for i in range(1, len(epochs)) if epochs[i] != epochs[i-1]]
     for idx in epoch_changes:
         plt.axvline(idx, color='red', alpha=0.3, linestyle='--', linewidth=0.5)

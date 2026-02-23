@@ -200,7 +200,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=4, 
         # Compute metrics for this batch
         ged = generalized_energy_distance(preds_bin, gts_bin)
         md = max_dice(preds_bin, gts_bin)
-        ci, sc, _, da = collective_insight(preds_bin, gts_bin)
+        ci, sc, _, da, old_ci = collective_insight(preds_bin, gts_bin)
         
         # ged shape is (B,) so we convert to a python list of B items and extend the global lists
         all_ged.extend(ged.tolist())
@@ -208,12 +208,14 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=4, 
         all_ci.extend(ci.tolist())
         all_sc.extend(sc.tolist())
         all_da.extend(da.tolist())
+        all_old_ci.extend(old_ci.tolist())
         
     return {
         'GED': sum(all_ged) / len(all_ged),
         'MaxDice': sum(all_max_dice) / len(all_max_dice),
         'CI': sum(all_ci) / len(all_ci),
         'Sensitivity': sum(all_sc) / len(all_sc),
-        'Agreement': sum(all_da) / len(all_da)
+        'Agreement': sum(all_da) / len(all_da),
+        'OldCI': sum(all_old_ci) / len(all_old_ci)
     }
 

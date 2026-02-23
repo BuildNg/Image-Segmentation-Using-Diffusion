@@ -233,5 +233,6 @@ def collective_insight(preds, gts):
     eps = 1e-8
     # Harmonic mean of the three metrics
     ci = 3 * sc * dmax * da / (sc * dmax + dmax * da + da * sc + eps)
+    old_ci = 3 * sc * dmax * da / (sc + dmax + da + eps)
     
-    return ci, sc, dmax, da
+    return ci, sc, dmax, da, old_ci

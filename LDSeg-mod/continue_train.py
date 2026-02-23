@@ -374,11 +374,15 @@ def continue_train(args):
                     f"Epoch {epoch + 1} Metrics: GED={metrics['GED']:.4f}, "
                     f"MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}, "
                     f"Sensitivity={metrics['Sensitivity']:.4f}, "
-                    f"Agreement={metrics['Agreement']:.4f}"
+                    f"Agreement={metrics['Agreement']:.4f}, "
+                    f"OldCI={metrics['OldCI']:.4f}"
                 )
                 print(
                     f"Metrics: GED={metrics['GED']:.4f}, "
-                    f"MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}"
+                    f"MaxDice={metrics['MaxDice']:.4f}, CI={metrics['CI']:.4f}, "
+                    f"Sensitivity={metrics['Sensitivity']:.4f}, "
+                    f"Agreement={metrics['Agreement']:.4f}, "
+                    f"OldCI={metrics['OldCI']:.4f}"
                 )
             except Exception as e:
                 logging.error(f"Failed to compute metrics: {e}")

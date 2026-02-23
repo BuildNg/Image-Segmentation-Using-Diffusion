@@ -142,7 +142,7 @@ def get_distribution_params(model, image, mask, t, device='cuda'):
         
     return output
 
-def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False, latent_size=None, cfg_scale=1.0):
+def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=4, device='cuda', use_ddim=False, latent_size=None, cfg_scale=1.0):
     """
     Compute GED, Max Dice, and Collective Insight for a given dataloader.
     
@@ -150,7 +150,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         model (LDSeg): Trained model.
         diffusion (GaussianDiffusion): Diffusion process.
         dataloader (DataLoader): Validation dataloader.
-        num_samples (int): Number of samples per image to generate for metrics.
+        num_samples (int): Number of samples per image to generate for metrics. Usually matches number of annotators.
         device: Device.
         use_ddim (bool): Whether to use DDIM sampling (faster) or DDPM (default).
         
@@ -202,11 +202,12 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         md = max_dice(preds_bin, gts_bin)
         ci, sc, _, da = collective_insight(preds_bin, gts_bin)
         
-        all_ged.append(ged.mean().item())
-        all_max_dice.append(md.mean().item())
-        all_ci.append(ci.mean().item())
-        all_sc.append(sc.mean().item())
-        all_da.append(da.mean().item())
+        # ged shape is (B,) so we convert to a python list of B items and extend the global lists
+        all_ged.extend(ged.tolist())
+        all_max_dice.extend(md.tolist())
+        all_ci.extend(ci.tolist())
+        all_sc.extend(sc.tolist())
+        all_da.extend(da.tolist())
         
     return {
         'GED': sum(all_ged) / len(all_ged),

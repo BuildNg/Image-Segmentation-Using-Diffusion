@@ -56,7 +56,16 @@ def sample_segmentation(model, diffusion, image, num_samples=1, device='cuda', u
                 # Classifier-Free Guidance dual-pass
                 cond_pred = model.denoiser(x, context, t)
                 uncond_pred = model.denoiser(x, None, t)
-                return uncond_pred + cfg_scale * (cond_pred - uncond_pred)
+                
+                L = x.shape[1]
+                if cond_pred.shape[1] == 2 * L:
+                    cond_eps, cond_var = torch.split(cond_pred, L, dim=1)
+                    uncond_eps, _ = torch.split(uncond_pred, L, dim=1)
+                    
+                    cfg_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+                    return torch.cat([cfg_eps, cond_var], dim=1)
+                else:
+                    return uncond_pred + cfg_scale * (cond_pred - uncond_pred)
             else:
                 return model.denoiser(x, context, t)
         
@@ -133,7 +142,7 @@ def get_distribution_params(model, image, mask, t, device='cuda'):
         
     return output
 
-def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16, device='cuda', use_ddim=False, latent_size=None, cfg_scale=1.0):
+def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=4, device='cuda', use_ddim=False, latent_size=None, cfg_scale=1.0):
     """
     Compute GED, Max Dice, and Collective Insight for a given dataloader.
     
@@ -141,7 +150,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         model (LDSeg): Trained model.
         diffusion (GaussianDiffusion): Diffusion process.
         dataloader (DataLoader): Validation dataloader.
-        num_samples (int): Number of samples per image to generate for metrics.
+        num_samples (int): Number of samples per image to generate for metrics. Usually matches number of annotators.
         device: Device.
         use_ddim (bool): Whether to use DDIM sampling (faster) or DDPM (default).
         
@@ -161,6 +170,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
     all_ci = []
     all_sc = []
     all_da = []
+    all_old_ci = []
     
     for images, all_masks, _paths in tqdm(dataloader, desc="Computing Metrics"):
         # images: (B, C, H, W)
@@ -191,19 +201,22 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=16,
         # Compute metrics for this batch
         ged = generalized_energy_distance(preds_bin, gts_bin)
         md = max_dice(preds_bin, gts_bin)
-        ci, sc, _, da = collective_insight(preds_bin, gts_bin)
+        ci, sc, _, da, old_ci = collective_insight(preds_bin, gts_bin)
         
-        all_ged.append(ged.mean().item())
-        all_max_dice.append(md.mean().item())
-        all_ci.append(ci.mean().item())
-        all_sc.append(sc.mean().item())
-        all_da.append(da.mean().item())
+        # ged shape is (B,) so we convert to a python list of B items and extend the global lists
+        all_ged.extend(ged.tolist())
+        all_max_dice.extend(md.tolist())
+        all_ci.extend(ci.tolist())
+        all_sc.extend(sc.tolist())
+        all_da.extend(da.tolist())
+        all_old_ci.extend(old_ci.tolist())
         
     return {
         'GED': sum(all_ged) / len(all_ged),
         'MaxDice': sum(all_max_dice) / len(all_max_dice),
         'CI': sum(all_ci) / len(all_ci),
         'Sensitivity': sum(all_sc) / len(all_sc),
-        'Agreement': sum(all_da) / len(all_da)
+        'Agreement': sum(all_da) / len(all_da),
+        'OldCI': sum(all_old_ci) / len(all_old_ci)
     }
 

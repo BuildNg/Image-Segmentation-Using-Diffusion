@@ -40,7 +40,7 @@ def iou(pred, target):
     
     return (intersection + smooth) / (union + smooth)
 
-def generalized_energy_distance(preds, gts):
+def generalized_energy_distance(preds, gts, nlabels=1, **kwargs):
     """
     Compute Generalized Energy Distance (GED).
     preds: (M, B, C, H, W) or (M, B, H, W) - M samples from model
@@ -54,33 +54,61 @@ def generalized_energy_distance(preds, gts):
 
     M = preds.size(0)
     N = gts.size(0)
+    assert M == N, f"Expected same number of predictions and ground truths, but got {M} and {N}"
     
-    # Distance function d(x,y) = 1 - IoU(x,y)
-    def dist(x, y):
-        return 1.0 - iou(x, y)
+    def dist_fct(m1, m2):
+        # Default to label 1 if nlabels is 1 (assumes binarization to foreground)
+        val = kwargs.get('label_range', [1] if nlabels == 1 else range(nlabels))
+        label_range = list(val)
+        
+        per_label_iou = []
+        for lbl in label_range:
+            m1_bin = (m1 == lbl).float()
+            m2_bin = (m2 == lbl).float()
+            
+            sum1 = m1_bin.sum(dim=(-1, -2, -3))
+            sum2 = m2_bin.sum(dim=(-1, -2, -3))
+            
+            both_zero = (sum1 == 0) & (sum2 == 0)
+            one_zero = ((sum1 > 0) & (sum2 == 0)) | ((sum1 == 0) & (sum2 > 0))
+            both_gt_zero = (sum1 > 0) & (sum2 > 0)
+            
+            res = torch.zeros_like(sum1)
+            res[both_zero] = 1.0
+            res[one_zero] = 0.0
+            
+            intersection = (m1_bin * m2_bin).sum(dim=(-1, -2, -3))
+            union = sum1 + sum2 - intersection
+            res[both_gt_zero] = intersection[both_gt_zero] / union[both_gt_zero]
+            
+            per_label_iou.append(res)
+            
+        per_label_iou = torch.stack(per_label_iou, dim=0)
+        return 1.0 - (per_label_iou.sum(dim=0) / len(label_range))
 
     # Term 1: 2 * E[d(S, Y)] (Cross-term)
     term1 = 0.0
     for i in range(M):
-        for j in range(N):
-            term1 += dist(preds[i], gts[j])
-    term1 *= 2.0 / (M * N)
+        for j in range(M):
+            term1 += dist_fct(preds[i], gts[j])
+    term1 *= 2.0 / (M ** 2)
 
     # Term 2: E[d(S, S')] (Model diversity)
     term2 = 0.0
     for i in range(M):
         for j in range(M):
-            term2 += dist(preds[i], preds[j])
-    term2 /= (M * M)
+            term2 += dist_fct(preds[i], preds[j])
+    term2 /= (M ** 2)
 
     # Term 3: E[d(Y, Y')] (GT diversity)
     term3 = 0.0
-    for i in range(N):
-        for j in range(N):
-            term3 += dist(gts[i], gts[j])
-    term3 /= (N * N)
+    for i in range(M):
+        for j in range(M):
+            term3 += dist_fct(gts[i], gts[j])
+    term3 /= (M ** 2)
 
-    return term1 - term2 - term3
+    ged_sq = term1 - term2 - term3
+    return ged_sq
 
 def max_dice(preds, gts):
     """
@@ -205,5 +233,6 @@ def collective_insight(preds, gts):
     eps = 1e-8
     # Harmonic mean of the three metrics
     ci = 3 * sc * dmax * da / (sc * dmax + dmax * da + da * sc + eps)
+    old_ci = 3 * sc * dmax * da / (sc + dmax + da + eps)
     
-    return ci, sc, dmax, da
+    return ci, sc, dmax, da, old_ci

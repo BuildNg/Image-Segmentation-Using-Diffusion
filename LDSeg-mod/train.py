@@ -263,7 +263,8 @@ def validate(model, val_loader, diffusion, timesteps, criterion_ce, criterion_di
                 eps_pred, _ = torch.split(denoiser_out, L, dim=1)
                 loss_mse = criterion_mse(eps_pred, noise)
                 loss_vlb = compute_explicit_vlb_loss(diffusion, clean_encoded.detach(), noisy_encoded.detach(), t, denoiser_out)
-                loss_diff = loss_mse + loss_vlb
+                lambda_vlb = losses_cfg.getfloat('Lambda_VLB', fallback=0.001)
+                loss_diff = loss_mse + lambda_vlb * loss_vlb
             else:
                 loss_diff = criterion_mse(denoiser_out, noise)
                 
@@ -478,7 +479,9 @@ def train(args):
                     eps_pred, _ = torch.split(denoiser_out, L, dim=1)
                     loss_mse = criterion_mse(eps_pred, noise)
                     loss_vlb = compute_explicit_vlb_loss(diffusion, clean_encoded.detach(), noisy_encoded.detach(), t, denoiser_out)
-                    loss_diff = loss_mse + loss_vlb
+                    
+                    lambda_vlb = train_cfg.getfloat('Losses', 'Lambda_VLB', fallback=0.001)
+                    loss_diff = loss_mse + lambda_vlb * loss_vlb
                 else:
                     loss_diff = criterion_mse(denoiser_out, noise)
                     

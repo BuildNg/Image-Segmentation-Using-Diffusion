@@ -238,8 +238,9 @@ def continue_train(args):
     model_cfg = load_config(model_config_path)
     schedule_type = model_cfg.get('NoiseScheduler', 'Scheduler')
     timesteps = model_cfg.getint('NoiseScheduler', 'Timesteps')
-    diffusion = create_gaussian_diffusion(steps=timesteps, noise_schedule=schedule_type)
-    logging.info(f"Noise scheduler: {schedule_type}, steps: {timesteps}")
+    learn_sigma = model.denoiser.learn_sigma
+    diffusion = create_gaussian_diffusion(steps=timesteps, noise_schedule=schedule_type, learn_sigma=learn_sigma)
+    logging.info(f"Noise scheduler: {schedule_type}, steps: {timesteps}, learn_sigma: {learn_sigma}")
 
     # 7. Optimizer & Scheduler
     lr = train_cfg.getfloat('Optimizer', 'LearningRate')

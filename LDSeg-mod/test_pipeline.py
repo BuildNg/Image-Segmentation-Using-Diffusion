@@ -78,8 +78,10 @@ class TestPipeline(unittest.TestCase):
         # For robustness, I'll write the config file based on typical keys I saw in code view.
         # Actually, let's just use the existing 'model_config.ini' if it exists, otherwise write one.
         
-        if os.path.exists('model_config.ini'):
-             self.config_path = 'model_config.ini'
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        real_config_path = os.path.join(script_dir, 'model_config.ini')
+        if os.path.exists(real_config_path):
+             self.config_path = real_config_path
         else:
              # Fallback: assume standard keys
              with open(self.config_path, 'w') as f:

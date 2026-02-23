@@ -74,7 +74,12 @@ def main():
     noise_schedule = model_cfg.get('NoiseScheduler', 'Scheduler', fallback='linear')
     
     print(f"Creating diffusion process (Steps: {diffusion_steps}, Schedule: {noise_schedule})...")
-    diffusion = create_gaussian_diffusion(steps=diffusion_steps, noise_schedule=noise_schedule)
+    learn_sigma = model_cfg.getboolean('Denoiser', 'LearnSigma', fallback=False)
+    diffusion = create_gaussian_diffusion(
+        steps=diffusion_steps, 
+        noise_schedule=noise_schedule,
+        learn_sigma=learn_sigma
+    )
     
     # 5. Setup DataLoader
     data_dir = eval_cfg.get('Data', 'DatasetDir')

@@ -170,6 +170,7 @@ def compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=4, 
     all_ci = []
     all_sc = []
     all_da = []
+    all_old_ci = []
     
     for images, all_masks, _paths in tqdm(dataloader, desc="Computing Metrics"):
         # images: (B, C, H, W)

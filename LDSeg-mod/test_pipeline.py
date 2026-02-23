@@ -149,7 +149,7 @@ class TestPipeline(unittest.TestCase):
         print("Testing Metrics Computation...")
         try:
             # We use the same dataloader as 'val_loader'
-            metrics = compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=2, device=self.device, cfg_scale=3.0)
+            metrics = compute_metrics_for_dataloader(model, diffusion, dataloader, num_samples=4, device=self.device, cfg_scale=3.0)
             print("Metrics Computed:", metrics)
             
             self.assertIn('GED', metrics)

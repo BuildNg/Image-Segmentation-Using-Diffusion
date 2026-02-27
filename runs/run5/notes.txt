@@ -1,2 +1,0 @@
-Model the backward process as a distribution (also predicting the variance, not
-just the mean of the Gaussian).

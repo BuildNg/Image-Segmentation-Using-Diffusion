@@ -1,7 +1,0 @@
-Evaluation Results:
-GED: 0.5399
-MaxDice: 0.5880
-CI: 0.4795
-Sensitivity: 0.4364
-Agreement: 0.8030
-Time taken: 9099.26 seconds

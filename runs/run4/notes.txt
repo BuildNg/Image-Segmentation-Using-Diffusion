@@ -1,9 +1,0 @@
-Scaled to 64M params
-LabelEncoder    11,751,491   18.2%
-LabelDecoder    17,795,846   27.5%
-ImageEncoder    11,726,989   18.1%
-Denoiser        20,717,889   32.0%
-Prior            1,370,604    2.1%
-Posterior        1,370,604    2.1%
-─────────────────────────────────
-GRAND TOTAL     64,733,423  100.0%

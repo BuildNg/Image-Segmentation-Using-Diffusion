@@ -288,8 +288,8 @@ class LDSeg(nn.Module):
         #    Both operate at latent resolution so that spatial dims match.
         #    Prior  sees (image_embedding, denoiser_prediction)
         #    Posterior sees (image_embedding, clean_encoded_mask)
-        prior_dist = self.prior(img_embedding, denoiser_out)
-        posterior_dist = self.posterior(img_embedding, encoded)
+        prior_dist = self.prior(img_embedding, noisy_encoded)
+        posterior_dist = self.posterior(img_embedding, denoiser_out)
 
         # 7. KL divergence
         kl_div = kl.kl_divergence(posterior_dist, prior_dist)  # (B,)

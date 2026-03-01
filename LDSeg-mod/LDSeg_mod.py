@@ -286,8 +286,8 @@ class LDSeg(nn.Module):
 
         # 6. Prior & Posterior distributions
         #    Both operate at latent resolution so that spatial dims match.
-        #    Prior  sees (image_embedding, denoiser_prediction)
-        #    Posterior sees (image_embedding, clean_encoded_mask)
+        #    Prior  sees (image_embedding, noisy_encoded)
+        #    Posterior sees (image_embedding, denoiser_out)
         prior_dist = self.prior(img_embedding, noisy_encoded)
         posterior_dist = self.posterior(img_embedding, denoiser_out)
 
